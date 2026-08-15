@@ -4,7 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>FinApp</title>
-<meta name="description" content="Personal household mortgage and investment tracker.">
 <meta name="theme-color" content="#0b0e14">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -12,8 +11,6 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FinApp">
 <link rel="icon" href="icon-192.png">
-</head>
-<body>
 <style>
 :root{
   --bg:#0b0e14; --surface:#131924; --surface-2:#182030; --surface-3:#212b3b;
@@ -201,7 +198,7 @@ html,body{margin:0; height:100%; overflow:hidden;}
 .seg{ display:flex; background:var(--surface-3); border-radius:var(--radius-sm); padding:3px; gap:2px;}
 .seg button{ flex:1; border:none; background:none; padding:8px 4px; border-radius:9px; font-size:13px; font-weight:600; color:var(--text-dim); cursor:pointer; font-family:var(--font-ui);}
 .seg button.active{ background:var(--surface); color:var(--text); box-shadow:0 1px 3px rgba(0,0,0,.15);}
-table.amort{ width:100%; border-collapse:collapse; font-family:var(--font-mono); font-size:12.5px; margin-top:10px;}
+table.amort{ width:100%; border-collapse:collapse; font-family:var(--font-mono); font-size:12.5px; margin-top:10px; color:var(--text);}
 table.amort th{ text-align:right; font-family:var(--font-ui); font-weight:600; color:var(--text-faint); font-size:10.5px; text-transform:uppercase; letter-spacing:.04em; padding:6px 4px; border-bottom:1px solid var(--border); position:sticky; top:0; background:var(--surface-2);}
 table.amort th:first-child, table.amort td:first-child{text-align:left;}
 table.amort td{ padding:7px 4px; text-align:right; border-bottom:1px solid var(--border-soft); }
@@ -226,6 +223,13 @@ table.amort td.i{color:var(--interest);} table.amort td.p{color:var(--principal)
 .toggle.on .knob{left:20px;}
 .selectchip{font-size:13px; font-weight:600; color:var(--accent); background:var(--accent-soft); padding:6px 11px; border-radius:9px; cursor:pointer; border:none; font-family:var(--font-ui);}
 .footnote{font-size:11.5px; color:var(--text-faint); line-height:1.5; margin-top:14px;}
+details.footnote, details.legend-box{ margin-top:6px; }
+details.footnote summary.info-btn, details.legend-box summary.info-btn{ list-style:none; }
+details.footnote summary.info-btn::-webkit-details-marker, details.legend-box summary.info-btn::-webkit-details-marker{ display:none; }
+details.footnote .footnote-body{ margin-top:8px; }
+details.legend-box{ background:none; padding:0; }
+details.legend-box[open]{ background:var(--surface-3); border-radius:var(--radius-sm); padding:10px 12px;}
+details.legend-box p{ margin:8px 0 0; }
 ::selection{background:var(--accent-soft);}
 .slider{-webkit-appearance:none; width:100%; height:4px; border-radius:4px; background:var(--surface-3); outline:none; margin:14px 0 6px;}
 .slider::-webkit-slider-thumb{-webkit-appearance:none; width:18px;height:18px;border-radius:50%;background:var(--accent); cursor:pointer;}
@@ -239,6 +243,9 @@ table.amort td.i{color:var(--interest);} table.amort td.p{color:var(--principal)
   .phone{ width:100%; max-width:460px; height:760px; max-height:none; border-radius:26px; }
 }
 </style>
+</head>
+<body>
+
 
 <div class="stage">
   <div class="phone">
@@ -268,32 +275,40 @@ const _now = new Date();
 const TODAY = new Date(_now.getFullYear(), _now.getMonth(), 1); // always the current month, for real ongoing use
 
 const properties = [
-  { id:'montana', name:'123 Example St', type:'4-Plex', note:null,
+  { id:'montana', name:'123 Example St', type:'4-Plex', note:'Refinanced Jan 2024',
     units:[{label:'Unit 1',beds:2,rent:1200},{label:'Unit 2',beds:2,rent:1200},{label:'Unit 3',beds:2,rent:1200},{label:'Unit 4',beds:2,rent:1200}],
     pmPct:10, taxesAnnual:0, insuranceAnnual:0, maintenancePct:0,
-    loans:[ {id:'montana2', label:'Mortgage', original:300000, rate:6.0, term:360, start:'2024-06-01'} ] },
+    loans:[ {id:'montana2', label:'Mortgage', original:300000, rate:6.00, term:360, start:'2024-01-01'} ],
+    prior:{original:350000, rate:7.00, term:360, start:'2021-06-01', end:'2024-01-01', payoff:320000} },
   { id:'barney', name:'456 Sample Ave', type:'4-Plex', note:null,
     units:[{label:'Unit 1',beds:3,rent:1300},{label:'Unit 2',beds:3,rent:1300},{label:'Unit 3',beds:3,rent:1300},{label:'Unit 4',beds:3,rent:1300}],
-    pmPct:10, taxesAnnual:0, insuranceAnnual:0, maintenancePct:0,
-    loans:[ {id:'barney', label:'Mortgage', original:400000, rate:6.5, term:360, start:'2024-01-01'} ] },
+    pmPct:10, pmPctAssumed:true, taxesAnnual:0, insuranceAnnual:0, maintenancePct:0,
+    loans:[ {id:'barney', label:'Mortgage', original:400000, rate:6.50, term:360, start:'2023-01-01',
+      confirmedExtras:[{date:'2024-06-01', amount:20000}]} ] },
   { id:'goldentrout', name:'789 Placeholder Ln', type:'Duplex', note:null,
     units:[{label:'Unit 1',beds:2,rent:1300},{label:'Unit 2',beds:2,rent:1300}],
     pmPct:10, taxesAnnual:0, insuranceAnnual:0, maintenancePct:0,
-    loans:[ {id:'goldentrout', label:'Mortgage', original:320000, rate:5.0, term:360, start:'2022-06-01'} ] },
-  { id:'cobbhill', name:'12 Demo Court', type:'Single Family', note:null,
-    units:[{label:'House',beds:3,rent:2200}],
+    loans:[ {id:'goldentrout', label:'Mortgage', original:320000, rate:4.50, term:360, start:'2020-04-01'} ] },
+  { id:'cobbhill', name:'12 Demo Court', type:'Single Family', note:'Owner\u2019s former residence, now rented',
+    units:[{label:'House',beds:3,rent:2300}],
     pmPct:0, taxesAnnual:0, insuranceAnnual:0, maintenancePct:0,
-    loans:[ {id:'cobbhill-main', label:'Primary mortgage', original:400000, rate:3.5, term:360, start:'2021-06-01'} ],
+    loans:[ {id:'cobbhill-main', label:'Primary mortgage', original:420000, rate:3.00, term:360, start:'2019-03-01'} ],
     otherLoans:[
-      {id:'cobbhill-geer', label:'Family note (remodel)', original:50000, rate:3.5, term:240, start:'2019-06-01'},
-      {id:'cobbhill-kate', label:'Family note 2 (remodel)', original:100000, rate:3.5, term:240, start:'2019-06-01'}
+      {id:'cobbhill-geer', label:'Family Member A note (remodel)', original:45000, rate:3.50, term:240, start:'2017-08-01', recurringExtra:1.00},
+      {id:'cobbhill-kate', label:'Family Member B note (remodel)', original:110000, rate:3.50, term:240, start:'2017-08-01', recurringExtra:5.00}
     ]},
   { id:'gallatin', name:'999 Test Commercial Way', type:'Commercial', note:null, nnn:true,
-    units:[{label:'Tenant A (NNN)',beds:null,rent:6000},{label:'Tenant B (NNN)',beds:null,rent:4000}],
+    units:[{label:'Tenant A (NNN)',beds:null,rent:8000,increases:[{id:'inc1',date:'2028-01-01',pct:3,recurring:true}]},{label:'Tenant B (NNN)',beds:null,rent:5000,increases:[{id:'inc2',date:'2028-01-01',pct:3,recurring:true}]}],
     pmPct:0, taxesAnnual:0, insuranceAnnual:0, maintenancePct:0,
-    loans:[ {id:'gallatin', label:'Mortgage', original:450000, rate:5.5, term:200, start:'2020-06-01'} ] }
+    loans:[ {id:'gallatin', label:'Mortgage', original:500000, rate:5.50, term:180, start:'2017-07-01',
+      confirmedExtras:[{date:'2022-03-01',amount:50000},{date:'2023-02-01',amount:80000}]} ] }
 ];
 function allLoansOf(prop){ return [...prop.loans, ...(prop.otherLoans||[])]; }
+/* ---- Standalone loans (not tied to any property) ---- */
+let _nextStandaloneLoanId = 1;
+function newStandaloneLoanId(){ return 'sl'+(_nextStandaloneLoanId++); }
+const standaloneLoans = [];
+function findStandaloneLoan(id){ return standaloneLoans.find(l=>l.id===id); }
 
 /* ============ INVESTMENTS (real balances/rates, manually reconciled) ============ */
 let _nextInvId = 1;
@@ -406,7 +421,7 @@ function scheduleRowAtDate(loanId, date){
   }
   return SCHED_INDEX[loanId][mkey(date)] || null;
 }
-function findLoan(id){ for(const p of properties) for(const l of allLoansOf(p)) if(l.id===id) return l; return null; }
+function findLoan(id){ for(const p of properties) for(const l of allLoansOf(p)) if(l.id===id) return l; const sl=findStandaloneLoan(id); if(sl) return sl; return null; }
 function findProperty(id){
   const direct = properties.find(p=>p.id===id);
   if(direct) return direct;
@@ -414,6 +429,8 @@ function findProperty(id){
     const loan = (p.otherLoans||[]).find(l=>l.id===id);
     if(loan) return { id:loan.id, name:loan.label.split(' note')[0], type:'Remodel loan &middot; '+p.name, note:null, loans:[loan], isStandaloneLoan:true };
   }
+  const sl = findStandaloneLoan(id);
+  if(sl) return { id:sl.id, name:sl.label||'New loan', type:'Loan', note:null, loans:[sl], isStandaloneLoan:true, committed:sl.committed!==false };
   return null;
 }
 function idxCurrent(rows){ return rows.findIndex(r=>mkey(r.date)===mkey(TODAY)); }
@@ -436,7 +453,23 @@ function propertyProgress(prop){
   const orig = propertyOriginal(prop); const bal = propertyCurrent(prop).balance;
   return Math.max(0, Math.min(1, (orig-bal)/orig));
 }
-function propertyRevenue(prop){ return prop.units.reduce((s,u)=>s+u.rent,0); }
+function unitRentAtDate(u, date){
+  let rent = u.rent;
+  (u.increases||[]).slice().sort((a,b)=>parseD(a.date)-parseD(b.date)).forEach(inc=>{
+    const start = parseD(inc.date);
+    if(date < start) return;
+    if(inc.recurring){
+      const months = (date.getFullYear()-start.getFullYear())*12 + (date.getMonth()-start.getMonth());
+      const times = Math.floor(months/12) + 1;
+      rent = rent * Math.pow(1 + inc.pct/100, times);
+    } else {
+      rent = rent * (1 + inc.pct/100);
+    }
+  });
+  return rent;
+}
+function propertyRevenueAtDate(prop, date){ return prop.units.reduce((s,u)=>s+unitRentAtDate(u,date),0); }
+function propertyRevenue(prop){ return propertyRevenueAtDate(prop, TODAY); }
 function propertyCustomCostsMonthly(prop){
   return (prop.customCosts||[]).reduce((s,c)=> s + (c.amount||0)*(FREQ_MULT[c.freq||'yearly'])/12, 0);
 }
@@ -462,7 +495,7 @@ function propertyCashFlowAtDate(prop, date){
     const orow = scheduleRowAtDate(l.id, date);
     return s + (orow ? orow.interest+orow.principal : 0);
   },0);
-  const gross = propertyRevenue(prop);
+  const gross = propertyRevenueAtDate(prop, date);
   const pm = prop.nnn ? 0 : gross*(prop.pmPct/100);
   const taxes = prop.nnn ? 0 : (prop.taxesAnnual||0)/12;
   const insurance = prop.nnn ? 0 : (prop.insuranceAnnual||0)/12;
@@ -471,14 +504,18 @@ function propertyCashFlowAtDate(prop, date){
   return gross - (pmt+otherPmt+pm+taxes+insurance+maintenance+custom);
 }
 /* ============ COMBINED RECEIVABLES (real estate + investments) ============ */
+function standaloneLoanPayment(id){ const r=currentRow(id); return r? r.interest+r.principal : 0; }
+function standaloneLoanPaymentAtDate(id, date){ const r=scheduleRowAtDate(id, date); return r? r.interest+r.principal : 0; }
 function incomeSources(){
   const list = [];
   properties.forEach(p=> list.push({ id:'prop:'+p.id, kind:'property', name:p.name, sub:p.type, amount: propertyCashFlow(p) }));
   investments.forEach(inv=> { if(inv.committed===false) return; list.push({ id:'inv:'+inv.id, kind:'investment', name:inv.name, sub:inv.isSample?'Investment &middot; sample':'Investment', amount: invMonthlyReturn(inv) }); });
+  standaloneLoans.forEach(l=> { if(l.committed===false) return; list.push({ id:'loan:'+l.id, kind:'loan', name:l.label, sub:'Loan payment', amount: -standaloneLoanPayment(l.id) }); });
   return list;
 }
 function incomeSourceAtDate(src, date){
   if(src.kind==='property') return propertyCashFlowAtDate(findProperty(src.id.slice(5)), date);
+  if(src.kind==='loan') return -standaloneLoanPaymentAtDate(src.id.slice(5), date);
   return invMonthlyReturnAtDate(findInvestment(src.id.slice(4)), date);
 }
 function incomeTotalAtDate(date){ return incomeSources().reduce((s,src)=>s+incomeSourceAtDate(src,date),0); }
@@ -501,7 +538,7 @@ const state = { tab:'income', pushed:null, sheet:null, sheetEdit:false, sort:'ba
   cas:{ selectedId:'montana2', customBalance:350000, customRate:5.99, customTermYears:27,
     prepay:50000, grossReturn:4.5, taxRate:24, horizonKey:'5', horizonYearsCustom:5,
     ipThreshold:2.0, compareSort:'net' },
-  income:{ sortDir:-1, expanded:false, invEdit:false, invDraft:null },
+  income:{ sortDir:-1, sortKey:'amount', expanded:false, invEdit:false, invDraft:null },
   lastSyncAt:null
 };
 
@@ -509,7 +546,7 @@ const state = { tab:'income', pushed:null, sheet:null, sheetEdit:false, sort:'ba
 const FINAPP_STORAGE_KEY = 'finapp-data-v1';
 function saveLocalData(){
   try{
-    const payload = { version:1, properties, investments, analyzerSamples, settings: state.settings, lastSyncAt: state.lastSyncAt||null };
+    const payload = { version:1, properties, investments, analyzerSamples, standaloneLoans, settings: state.settings, lastSyncAt: state.lastSyncAt||null };
     localStorage.setItem(FINAPP_STORAGE_KEY, JSON.stringify(payload));
   }catch(e){}
 }
@@ -521,6 +558,7 @@ function loadLocalData(){
     if(Array.isArray(data.properties)) properties.splice(0, properties.length, ...data.properties);
     if(Array.isArray(data.investments)) investments.splice(0, investments.length, ...data.investments);
     if(Array.isArray(data.analyzerSamples)) analyzerSamples.splice(0, analyzerSamples.length, ...data.analyzerSamples);
+    if(Array.isArray(data.standaloneLoans)) standaloneLoans.splice(0, standaloneLoans.length, ...data.standaloneLoans);
     if(data.settings) Object.assign(state.settings, data.settings);
     if(data.lastSyncAt) state.lastSyncAt = data.lastSyncAt;
   }catch(e){}
@@ -531,7 +569,7 @@ function fmtDateTime(iso){
   return d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})+' at '+d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
 }
 function exportData(){
-  const payload = { version:1, properties, investments, analyzerSamples, settings: state.settings, exportedAt: new Date().toISOString() };
+  const payload = { version:1, properties, investments, analyzerSamples, standaloneLoans, settings: state.settings, exportedAt: new Date().toISOString() };
   state.lastSyncAt = payload.exportedAt;
   const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
@@ -555,6 +593,7 @@ function handleImportFile(input){
       if(Array.isArray(data.properties)) properties.splice(0, properties.length, ...data.properties);
       if(Array.isArray(data.investments)) investments.splice(0, investments.length, ...data.investments);
       if(Array.isArray(data.analyzerSamples)) analyzerSamples.splice(0, analyzerSamples.length, ...data.analyzerSamples);
+      if(Array.isArray(data.standaloneLoans)) standaloneLoans.splice(0, standaloneLoans.length, ...data.standaloneLoans);
       if(data.settings) Object.assign(state.settings, data.settings);
       state.lastSyncAt = data.exportedAt || new Date().toISOString();
       for(const k in SCHED) delete SCHED[k];
@@ -702,8 +741,8 @@ function renderPortfolio(){
   </div>
   ${sorted.map(p=>renderPropCard(p)).join('')}
 
-  <div class="section-label" style="margin-top:22px;">Other loans</div>
-  ${otherLoanEntries().map(({loan,parent})=>{
+  <div class="section-label" style="margin-top:22px; display:flex; justify-content:space-between; align-items:center;"><span>Other loans</span><span class="link" style="font-size:12px; font-weight:600; text-transform:none; letter-spacing:normal;" onclick="loan_openAdd()">+ Add loan</span></div>
+  ${otherLoanEntries().length===0 ? `<div class="dim" style="font-size:12.5px;">None yet &mdash; e.g. a personal loan not tied to a property.</div>` : otherLoanEntries().map(({loan,parent})=>{
     const row = currentRow(loan.id);
     const yl = yearsLeft(loan.id);
     const progress = Math.max(0, Math.min(1, (loan.original-row.balance)/loan.original));
@@ -713,7 +752,7 @@ function renderPortfolio(){
       <div class="prop-top">
         <div>
           <div class="prop-name">${loan.label.split(' note')[0]}</div>
-          <div class="prop-sub">Remodel loan &middot; ${parent.name}</div>
+          <div class="prop-sub">${parent ? 'Remodel loan &middot; '+parent.name : 'Personal loan'}</div>
         </div>
         <div style="text-align:right;">
           <div class="prop-balance">${fmt$(row.balance)}</div>
@@ -728,13 +767,14 @@ function renderPortfolio(){
       </div>
     </div>`;
   }).join('')}
-  <div class="footnote">Already counted in the total balance and portfolio I/P above &mdash; shown here on their own since they're personal notes, not separate properties.</div>
+  <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Remodel notes are already counted in the total balance and portfolio I/P above, shown here since they're personal notes, not separate properties. Personal loans are not tied to any property and are not included in the portfolio balance/I/P above &mdash; they show as a cost on the Income page instead.</div></details>
   <div style="height:6px;"></div>
   `;
 }
 function otherLoanEntries(){
   const list = [];
   properties.forEach(p=>{ (p.otherLoans||[]).forEach(loan=>{ list.push({loan, parent:p}); }); });
+  standaloneLoans.forEach(loan=>{ if(loan.committed!==false) list.push({loan, parent:null}); });
   return list;
 }
 
@@ -787,7 +827,7 @@ function renderAllocateDetail(){
       <div class="metric principal"><div class="v">${fmt$(r.interestSaved)}</div><div class="l">Interest saved</div></div>
     </div>
   </div>`).join('')}
-  <div class="footnote" style="margin-bottom:18px;">Each row models applying the full amount as a one-time payment next month to that loan alone, on top of anything already planned or locked in &mdash; nothing here is saved automatically. Open a loan's own planner to actually commit it.</div>
+  <details class="footnote" style="margin-bottom:6px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Each row models applying the full amount as a one-time payment next month to that loan alone, on top of anything already planned or locked in &mdash; nothing here is saved automatically. Open a loan's own planner to actually commit it.</div></details>
   `;
 }
 
@@ -931,6 +971,60 @@ function customCostRow(propId, c, editing){
   </div>`;
 }
 function rev_set(id, idx, val){ const p=findProperty(id); p.units[idx].rent=Math.max(0, numFrom(val)); render(); }
+/* ---- Scheduled % rent increases (per unit) ---- */
+let _nextIncreaseId=3;
+function newIncreaseId(){ return 'inc'+(_nextIncreaseId++); }
+function unitIncrease_add(propId, idx){
+  const p = findProperty(propId); const u = p.units[idx];
+  u.increases = u.increases||[];
+  u.increases.push({ id:newIncreaseId(), date: mkey(addM(TODAY,12))+'-01', pct:3, recurring:true });
+  render();
+}
+function unitIncrease_setRecurring(propId, idx, incId, recurring){
+  const u = findProperty(propId).units[idx];
+  const inc = (u.increases||[]).find(x=>x.id===incId);
+  if(inc) inc.recurring = recurring;
+  render();
+}
+function unitIncrease_setDate(propId, idx, incId, val){
+  const u = findProperty(propId).units[idx];
+  const inc = (u.increases||[]).find(x=>x.id===incId);
+  if(inc && val) inc.date = val+'-01';
+  render();
+}
+function unitIncrease_setPct(propId, idx, incId, val){
+  const u = findProperty(propId).units[idx];
+  const inc = (u.increases||[]).find(x=>x.id===incId);
+  if(inc) inc.pct = numFrom(val);
+  render();
+}
+function unitIncrease_delete(propId, idx, incId){
+  const u = findProperty(propId).units[idx];
+  u.increases = (u.increases||[]).filter(x=>x.id!==incId);
+  render();
+}
+function unitRow(propId, u, idx, editing){
+  const increases = (u.increases||[]).slice().sort((a,b)=>parseD(a.date)-parseD(b.date));
+  const label = `${u.label}${u.beds?` &middot; ${u.beds}bd`:''}`;
+  if(!editing){
+    return `<div class="row-line"><span class="l">${label}</span><span class="v">${fmt$(u.rent)}/mo</span></div>
+    ${increases.map(inc=>`<div class="dim" style="font-size:11px; margin:-2px 0 4px; padding-left:2px;">+${inc.pct}%${inc.recurring?' every year':''} starting ${fmtMonth(parseD(inc.date))}</div>`).join('')}`;
+  }
+  return `<div class="row-line"><span class="l">${label}</span><input id="in-unit-${idx}" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-unit-'+idx,u.rent)}" oninput="RAW['in-unit-${idx}']=this.value; rev_set('${propId}',${idx},this.value)"/></div>
+  ${increases.map(inc=>`<div class="cost-row" style="margin:4px 0 8px; padding-left:10px;">
+    <div class="top" style="gap:8px;">
+      <input type="month" value="${mkey(parseD(inc.date))}" oninput="unitIncrease_setDate('${propId}',${idx},'${inc.id}',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-mono); font-size:13px; font-weight:600; outline:none; flex:1; min-width:0;"/>
+      <input type="text" inputmode="decimal" style="width:56px; text-align:right; background:var(--surface-3); border:1px solid var(--border); border-radius:8px; padding:6px 6px; font-family:var(--font-mono); font-size:13px; font-weight:600; color:var(--text);" value="${rv('in-inc-'+inc.id, inc.pct)}" oninput="RAW['in-inc-${inc.id}']=this.value; unitIncrease_setPct('${propId}',${idx},'${inc.id}',this.value)"/>
+      <span class="faint" style="font-size:12px;">%</span>
+    </div>
+    <div class="seg" style="margin-top:6px;">
+      <button class="${inc.recurring?'active':''}" onclick="unitIncrease_setRecurring('${propId}',${idx},'${inc.id}',true)" style="font-size:10.5px; padding:6px 3px;">Every year</button>
+      <button class="${!inc.recurring?'active':''}" onclick="unitIncrease_setRecurring('${propId}',${idx},'${inc.id}',false)" style="font-size:10.5px; padding:6px 3px;">One-time</button>
+    </div>
+    <div style="text-align:right; margin-top:4px;"><span class="link" style="color:var(--danger); font-size:11px;" onclick="unitIncrease_delete('${propId}',${idx},'${inc.id}')">Remove</span></div>
+  </div>`).join('')}
+  <div style="text-align:right; margin:0 0 10px;"><span class="link" style="font-size:11px;" onclick="unitIncrease_add('${propId}',${idx})">+ Add scheduled increase</span></div>`;
+}
 const editFieldStyle='width:92px; text-align:right; background:var(--surface-3); border:1px solid var(--border); border-radius:8px; padding:6px 8px; font-family:var(--font-mono); font-size:14px; font-weight:600; color:var(--text);';
 
 function sheetHead(title, propName, showEdit){
@@ -957,7 +1051,7 @@ function renderSheet(){
       <div class="row-line"><span class="l">Current projected lifetime interest</span><span class="v">${fmt$(currentTotal)}</span></div>
       <div class="row-line"><span class="l">Confirmed interest saved</span><span class="v" style="color:var(--principal)">${fmt$(saved)}</span></div>
       <div class="row-line"><span class="l">Original amount, combined</span><span class="v">${fmt$(propertyOriginal(prop))}</span></div>
-      <div class="legend-box"><p>Includes every loan tied to this property. These amounts assume scheduled payments continue and include only confirmed extra payments already made &mdash; planned (not yet locked in) extra payments are excluded.${prop.prior?` Prior note: ${fmt$(prop.prior.original)} @ ${fmtPct(prop.prior.rate)}, opened ${fmtMonth(parseD(prop.prior.start))}, closed via refinance ${fmtMonth(parseD(prop.prior.end))} with a ${fmt$(prop.prior.payoff)} payoff.`:''}</p></div>
+      <details class="legend-box"><summary class="info-btn">&#9432;</summary><p>Includes every loan tied to this property. These amounts assume scheduled payments continue and include only confirmed extra payments already made &mdash; planned (not yet locked in) extra payments are excluded.${prop.prior?` Prior note: ${fmt$(prop.prior.original)} @ ${fmtPct(prop.prior.rate)}, opened ${fmtMonth(parseD(prop.prior.start))}, closed via refinance ${fmtMonth(parseD(prop.prior.end))} with a ${fmt$(prop.prior.payoff)} payoff.`:''}</p></details>
     </div></div>`;
   }
   if(s.type==='costs'){
@@ -971,7 +1065,7 @@ function renderSheet(){
       <div class="row-line"><span class="l">Net cash flow (rent &minus; costs)</span><span class="v" style="color:${cf>=0?'var(--principal)':'var(--interest)'}">${fmtSigned$(cf)}</span></div>
       <div class="row-line"><span class="l">Mortgage P&amp;I</span><span class="v">${fmt$(costs.pmt)}</span></div>
       ${costs.otherPmt>0.005? `<div class="row-line"><span class="l">Other notes P&amp;I</span><span class="v">${fmt$(costs.otherPmt)}</span></div>`:''}
-      ${prop.nnn ? `<div class="legend-box"><p>Triple-net lease &mdash; both tenants pay taxes, insurance, and maintenance directly. The mortgage payment is the only owner-side cost.</p></div>` : `
+      ${prop.nnn ? `<details class="legend-box"><summary class="info-btn">&#9432;</summary><p>Triple-net lease &mdash; both tenants pay taxes, insurance, and maintenance directly. The mortgage payment is the only owner-side cost.</p></details>` : `
       <div class="cost-row">
         <div class="top"><span class="l">PM fee (${prop.pmPct}% of rent)${prop.pmPctAssumed?' <span class="faint">&middot; assumed</span>':''}</span><span class="v">${fmt$(costs.pm)}</span></div>
         <div class="asof">${prop.pmPctDate?`As of ${fmtMonth(parseD(prop.pmPctDate))}`:'Not yet confirmed'} &middot; <span class="link" style="font-size:10.5px;" onclick="goToPMSettings()">Edit in Settings &rsaquo;</span></div>
@@ -986,7 +1080,7 @@ function renderSheet(){
       ${editing ? `<div style="text-align:center; margin-top:8px;"><button class="btn-ghost-sm" onclick="customCost_add('${prop.id}')">+ Add cost</button></div>` : ((prop.customCosts||[]).length===0 ? `<div class="dim" style="font-size:12px;">None yet &mdash; e.g. trash, water, internet.</div>` : '')}
       `}
       <div class="row-line"><span class="l">Total monthly costs</span><span class="v">${fmt$(costs.total)}</span></div>
-      ${!prop.nnn?`<div class="legend-box"><p>Set Taxes and Insurance to however they actually get paid &mdash; yearly, quarterly, or monthly &mdash; and enter that period's amount; it's converted to a monthly cost automatically. The date is just an approximation of when it's last/next due, for your own reference.</p></div>`:''}
+      ${!prop.nnn?`<details class="legend-box"><summary class="info-btn">&#9432;</summary><p>Set Taxes and Insurance to however they actually get paid &mdash; yearly, quarterly, or monthly &mdash; and enter that period's amount; it's converted to a monthly cost automatically. The date is just an approximation of when it's last/next due, for your own reference.</p></details>`:''}
     </div></div>`;
   }
   if(s.type==='revenue'){
@@ -998,9 +1092,9 @@ function renderSheet(){
       <div class="sheet-handle"></div>
       ${sheetHead('Revenue', prop.name, true)}
       <div class="row-line"><span class="l">Net cash flow (rent &minus; costs)</span><span class="v" style="color:${cf>=0?'var(--principal)':'var(--interest)'}">${fmtSigned$(cf)}</span></div>
-      ${prop.units.map((u,i)=>`<div class="row-line"><span class="l">${u.label}${u.beds?` &middot; ${u.beds}bd`:''}</span>${editing?`<input id="in-unit-${i}" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-unit-'+i,u.rent)}" oninput="RAW['in-unit-${i}']=this.value; rev_set('${prop.id}',${i},this.value)"/>`:`<span class="v">${fmt$(u.rent)}/mo</span>`}</div>`).join('')}
+      ${prop.units.map((u,i)=>unitRow(prop.id, u, i, editing)).join('')}
       <div class="row-line"><span class="l">Gross rent</span><span class="v">${fmt$(gross)}</span></div>
-      <div class="legend-box"><p>Update a unit's rent here whenever a lease renews or changes &mdash; it feeds Costs and cash flow everywhere this property appears.</p></div>
+      <details class="legend-box"><summary class="info-btn">&#9432;</summary><p>Update a unit's rent here whenever a lease renews or changes &mdash; it feeds Costs and cash flow everywhere this property appears.</p></details>
     </div></div>`;
   }
   if(s.type==='planner'){
@@ -1093,8 +1187,57 @@ function plannerMetrics(propId){
     yearsRemainingCurrent, yearsRemainingNew, interestRemainingCurrent:a, interestRemainingNew:b};
 }
 
+/* ---- Standalone loan CRUD ---- */
+function loan_openAdd(){
+  const id = newStandaloneLoanId();
+  standaloneLoans.push({ id, label:'', original:0, rate:0, term:0, start: mkey(TODAY)+'-01', committed:false });
+  push({type:'loan', id});
+}
+function loan_delete(id){
+  const idx = standaloneLoans.findIndex(l=>l.id===id);
+  if(idx>=0) standaloneLoans.splice(idx,1);
+  goBack();
+}
+function loan_commit(id){
+  const l = findStandaloneLoan(id);
+  if(!l || !l.label.trim() || l.original<=0 || l.term<=0) return;
+  l.committed = true;
+  render();
+}
+function loan_set(id, field, val){
+  const l = findStandaloneLoan(id);
+  if(!l) return;
+  if(field==='label') l.label = val;
+  else if(field==='start'){ if(val) l.start = val+'-01'; }
+  else l[field] = Math.max(0, numFrom(val));
+  delete SCHED[id]; delete SCHED_INDEX[id];
+  render();
+}
+function renderStandaloneLoanDraft(id){
+  const l = findStandaloneLoan(id);
+  const canSave = l.label.trim() && l.original>0 && l.term>0;
+  return `
+  <div class="header-sticky"><button class="back" onclick="loan_delete('${id}')">&lsaquo; ${backLabel()}</button></div>
+  <div class="card" style="padding:14px 16px;">
+    <div class="dim" style="font-size:12px; margin-bottom:2px;">Name</div>
+    <input type="text" value="${l.label}" placeholder="e.g. Personal Loan" oninput="loan_set('${id}','label',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-ui); font-size:18px; font-weight:700; outline:none; width:100%; margin-bottom:12px;"/>
+    <div class="dim" style="font-size:12px; margin-bottom:2px;">Original amount</div>
+    <div class="input-row"><span class="suffix">$</span><input type="text" inputmode="decimal" value="${rv('in-sl-original',l.original||'')}" oninput="RAW['in-sl-original']=this.value; loan_set('${id}','original',this.value)"/></div>
+    <div class="dim" style="font-size:12px; margin:12px 0 2px;">Rate (%)</div>
+    <div class="input-row"><input type="text" inputmode="decimal" value="${rv('in-sl-rate',l.rate||'')}" oninput="RAW['in-sl-rate']=this.value; loan_set('${id}','rate',this.value)"/></div>
+    <div class="dim" style="font-size:12px; margin:12px 0 2px;">Term (months)</div>
+    <div class="input-row"><input type="text" inputmode="decimal" value="${rv('in-sl-term',l.term||'')}" oninput="RAW['in-sl-term']=this.value; loan_set('${id}','term',this.value)"/></div>
+    <div class="dim" style="font-size:12px; margin:12px 0 2px;">Start date</div>
+    <div class="input-row"><input type="month" value="${mkey(parseD(l.start))}" oninput="loan_set('${id}','start',this.value)" style="background:none;border:none;color:var(--text);font-family:var(--font-mono);font-size:16px;font-weight:700;outline:none;width:100%;"/></div>
+    <div class="btn-row" style="margin-top:16px;">
+      <div class="btn btn-primary" style="${canSave?'':'opacity:.5; pointer-events:none;'}" onclick="loan_commit('${id}')">Save loan</div>
+    </div>
+    <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Shows up as a monthly payment on the Income page, and here on Portfolio under Other loans &mdash; it isn't tied to any property.</div></details>
+  </div>`;
+}
 function renderLoanDetail(propId){
   const prop = findProperty(propId);
+  if(prop.isStandaloneLoan && prop.committed===false) return renderStandaloneLoanDraft(propId);
   const c = propertyCurrent(prop);
   const yrs = propertyYearsLeft(prop);
   const progress = propertyProgress(prop);
@@ -1153,7 +1296,7 @@ function renderLoanDetail(propId){
     </tbody>
   </table>
   </div>
-  <div class="footnote" style="margin-bottom:18px;">Debt vs. ownership visualization &mdash; reserved, not designed yet.</div>
+  <details class="footnote" style="margin-bottom:6px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Debt vs. ownership visualization &mdash; reserved, not designed yet.</div></details>
   `;
 }
 
@@ -1233,7 +1376,7 @@ function renderPlannerSheet(propId){
       <div class="btn btn-confirm" onclick="pl_save('${propId}','confirmed')">Lock in (teal)</div>
     </div>
     ${draft.amount>0? `<div style="text-align:center; margin-top:10px;"><button class="btn-ghost-sm" onclick="pl_cancelEdit('${propId}')">${draft.editing?'Cancel edit':'Clear'}</button></div>` : ''}
-    <div class="footnote">Locking in only changes months from now forward &mdash; past balances never get rewritten. Planned entries are just a preview until you lock them in.</div>
+    <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Locking in only changes months from now forward &mdash; past balances never get rewritten. Planned entries are just a preview until you lock them in.</div></details>
   </div></div>`;
 }
 
@@ -1409,7 +1552,7 @@ function renderAnalyzerLibrary(){
       </div>
     </div>`;
   }).join('')}
-  <div class="footnote">Tap + to add a property or an investment scenario &mdash; just a name and a starting number to begin. Add more detail once you're in.</div>
+  <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Tap + to add a property or an investment scenario &mdash; just a name and a starting number to begin. Add more detail once you're in.</div></details>
   `;
 }
 function az_openAddChoice(){ openSheet({type:'analyzerAddChoice'}); }
@@ -1525,7 +1668,7 @@ function renderAnalyzerDetail(id){
       </tbody>
     </table>
     </div>
-    <div class="legend-box"><p>Hypothetical schedule from today, assuming no extra payments &mdash; not a real amortization record.</p></div>
+    <details class="legend-box"><summary class="info-btn">&#9432;</summary><p>Hypothetical schedule from today, assuming no extra payments &mdash; not a real amortization record.</p></details>
   ` : `<div class="dim" style="font-size:12px;">Enter a loan amount, rate, and term above to generate a schedule.</div>`;
 
   return `<div class="overlay" onclick="if(event.target===this) az_closeDetail('${id}')"><div class="sheet">
@@ -1615,7 +1758,7 @@ function renderAnalyzerDetail(id){
   ${azSection(id,'receivables','Receivables', recvSummary, recvBody)}
   ${azSection(id,'amort','Amortization Schedule', amortSummary, amortBody)}
 
-  <div class="footnote" style="margin-bottom:6px;">${p.isSample? 'Sample entry with placeholder numbers &mdash; ' : ''}Every figure recalculates live from what's entered above. Fields left blank are treated as not applicable, not zero.</div>
+  <details class="footnote" style="margin-bottom:6px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">${p.isSample? 'Sample entry with placeholder numbers &mdash; ' : ''}Every figure recalculates live from what's entered above. Fields left blank are treated as not applicable, not zero.</div></details>
   ${!p.committed ? `<div class="btn-row"><div class="btn btn-primary" style="${canCommit?'':'opacity:.5; pointer-events:none;'}" onclick="az_commit('${id}')">Add to Analyzer</div></div>` : ''}
   </div></div>`;
 }
@@ -1634,7 +1777,7 @@ function renderAnalyzerInvestmentDetail(id){
       </tbody>
     </table>
     </div>
-    <div class="legend-box"><p>Hypothetical growth schedule &mdash; not tied to any real investment account, assumes a constant rate held for the full horizon.</p></div>
+    <details class="legend-box"><summary class="info-btn">&#9432;</summary><p>Hypothetical growth schedule &mdash; not tied to any real investment account, assumes a constant rate held for the full horizon.</p></details>
   ` : `<div class="dim" style="font-size:12px;">Enter a starting balance and rate above to generate a schedule.</div>`;
   return `<div class="overlay" onclick="if(event.target===this) az_closeDetail('${id}')"><div class="sheet">
   <div class="az-sticky">
@@ -1679,7 +1822,7 @@ function renderAnalyzerInvestmentDetail(id){
 
   ${azSection(id,'invschedule','Growth Schedule', scheduleSummary, scheduleBody)}
 
-  <div class="footnote" style="margin-bottom:6px;">${p.isSample? 'Sample entry with placeholder numbers &mdash; ' : ''}Hypothetical &mdash; not tied to any real investment account on the Income tab. Assumes a constant rate for the whole horizon.</div>
+  <details class="footnote" style="margin-bottom:6px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">${p.isSample? 'Sample entry with placeholder numbers &mdash; ' : ''}Hypothetical &mdash; not tied to any real investment account on the Income tab. Assumes a constant rate for the whole horizon.</div></details>
   ${!p.committed ? `<div class="btn-row"><div class="btn btn-primary" style="${canCommit?'':'opacity:.5; pointer-events:none;'}" onclick="az_commit('${id}')">Add to Analyzer</div></div>` : ''}
   </div></div>`;
 }
@@ -1910,7 +2053,7 @@ function renderPrepayAnalysis(){
     <div class="row-line"><span class="l">Balance</span><span class="v">${fmt$(loanParams.balance)}</span></div>
     <div class="row-line"><span class="l">Rate</span><span class="v">${fmtPct(loanParams.rate)}</span></div>
     <div class="row-line"><span class="l">Remaining term</span><span class="v">${Math.floor(loanParams.termMonths/12)}y ${loanParams.termMonths%12}mo</span></div>
-    <div class="footnote">Pulled from Portfolio, real data as of ${fmtMonth(TODAY)}.</div>
+    <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Pulled from Portfolio, real data as of ${fmtMonth(TODAY)}.</div></details>
     `}
   </div>
 
@@ -1961,7 +2104,7 @@ function renderPrepayAnalysis(){
       <span><span class="dot" style="background:var(--accent)"></span>Net advantage</span>
       <span><span class="dot" style="background:var(--principal)"></span>Optimal point</span>
     </div>
-    <div class="footnote">Every point is a full amortization + compounding run at that prepayment amount &mdash; not an estimate. Dashed line marks your current selection.</div>
+    <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Every point is a full amortization + compounding run at that prepayment amount &mdash; not an estimate. Dashed line marks your current selection.</div></details>
   `)}
 
   ${azSection('cas','compare','Compare Across Your Loans', considered.length+' above '+fmtRatio(c.ipThreshold)+' I/P', `
@@ -1988,13 +2131,29 @@ function renderPrepayAnalysis(){
     ` : ''}
   `)}
 
-  <div class="footnote" style="margin:14px 0 18px;">Every number here runs through the same amortization engine as Portfolio &mdash; not a separate estimate.</div>
+  <details class="footnote" style="margin:14px 0 18px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Every number here runs through the same amortization engine as Portfolio &mdash; not a separate estimate.</div></details>
   `;
 }
 
 /* ============ INCOME (real estate + investments, combined) ============ */
 const INCOME_MONTHS_AHEAD = 600; // 50 years — long enough for full lifetime planning
-function setIncomeSortDir(){ state.income.sortDir *= -1; render(); }
+function incomeSourceAge(src){
+  if(src.kind==='property'){ return parseD(findProperty(src.id.slice(5)).loans[0].start).getTime(); }
+  if(src.kind==='loan'){ const l=findStandaloneLoan(src.id.slice(5)); return l ? parseD(l.start).getTime() : Infinity; }
+  const inv = findInvestment(src.id.slice(4));
+  return inv && inv.balanceDate ? parseD(inv.balanceDate).getTime() : Infinity;
+}
+const INCOME_SORTS = {
+  amount:{ label:'Amount', fn:src=>src.amount, defaultDir:-1 },
+  profitable:{ label:'Profitable', fn:src=>src.amount, defaultDir:-1 },
+  costly:{ label:'Costly', fn:src=>src.amount, defaultDir:1 },
+  oldest:{ label:'Oldest', fn:src=>incomeSourceAge(src), defaultDir:1 }
+};
+function setIncomeSort(key){
+  if(state.income.sortKey===key) state.income.sortDir *= -1;
+  else { state.income.sortKey = key; state.income.sortDir = INCOME_SORTS[key].defaultDir; }
+  render();
+}
 function toggleIncomeExpand(){ state.income.expanded = !state.income.expanded; render(); }
 /* Precomputes every source's monthly value across the whole window in one pass each —
    calling invMonthlyReturnAtDate/propertyCashFlowAtDate per-cell would be far too slow at 600 rows. */
@@ -2068,8 +2227,9 @@ function renderIncomeTimeline(cols, months, series){
 let _incomeTimelineCache = { key:null, html:null };
 function renderIncomeTimelineCached(allSources){
   const timelineCols = state.income.expanded ? allSources : allSources.slice(0,5);
-  const cacheKey = state.income.sortDir+'|'+state.income.expanded+'|'+
+  const cacheKey = state.income.sortDir+'|'+(state.income.sortKey||'amount')+'|'+state.income.expanded+'|'+
     JSON.stringify(investments)+'|'+
+    JSON.stringify(standaloneLoans)+'|'+
     JSON.stringify(properties.map(p=>({id:p.id, taxesAnnual:p.taxesAnnual, insuranceAnnual:p.insuranceAnnual, pmPct:p.pmPct, maintenancePct:p.maintenancePct, customCosts:p.customCosts, units:p.units, loans:p.loans, otherLoans:p.otherLoans, nnn:p.nnn})));
   if(_incomeTimelineCache.key === cacheKey) return _incomeTimelineCache.html;
   const months = []; for(let i=0;i<INCOME_MONTHS_AHEAD;i++) months.push(addM(TODAY,i));
@@ -2079,7 +2239,10 @@ function renderIncomeTimelineCached(allSources){
   return html;
 }
 function renderIncome(){
-  const allSources = incomeSources().sort((a,b)=>(a.amount-b.amount)*state.income.sortDir);
+  const sortKey = state.income.sortKey||'amount';
+  const sortDir = state.income.sortDir;
+  const sortFn = INCOME_SORTS[sortKey].fn;
+  const allSources = incomeSources().sort((a,b)=>(sortFn(a)-sortFn(b))*sortDir);
   const total = allSources.reduce((s,x)=>s+x.amount,0);
   return `
   <div class="header"><h1>Income</h1><div style="display:flex; gap:8px;"><div class="iconbtn" onclick="inv_openAdd()">+</div><div class="iconbtn" onclick="push({type:'settings'})">${tabIcon('gear')}</div></div></div>
@@ -2090,15 +2253,17 @@ function renderIncome(){
   </div>
 
   <div class="sort-row">
-    <div class="chip active" onclick="setIncomeSortDir()">Amount ${state.income.sortDir===1?'&uarr; lowest first':'&darr; highest first'}</div>
+    ${Object.entries(INCOME_SORTS).map(([k,v])=>`<div class="chip ${sortKey===k?'active':''}" onclick="setIncomeSort('${k}')">${v.label}${sortKey===k?(sortDir===1?' &uarr;':' &darr;'):''}</div>`).join('')}
   </div>
 
   ${allSources.length===0 ? `<div class="dim" style="font-size:13px; margin-top:10px;">No receivables yet.</div>` : allSources.map(src=>incomeSourceCard(src)).join('')}
 
   <div class="section-label" style="margin-top:22px;">Monthly Timeline</div>
   ${renderIncomeTimelineCached(allSources)}
-  ${allSources.length>5 ? `<div style="text-align:right; margin-top:8px;"><span class="link" style="font-size:13px;" onclick="toggleIncomeExpand()">${state.income.expanded?'Show top 5 only':'Expand to show all '+allSources.length+' sources'} &rsaquo;</span></div>` : ''}
-  <div class="footnote" style="margin:14px 0 18px;">Real estate columns come from each loan's real schedule &mdash; rent and costs assumed to hold steady until you update them. Columns marked ~ are investments, projected at the current rate &mdash; not guaranteed, since markets move. Row for ${fmtMonth(TODAY)} is highlighted as the current month. Showing ${INCOME_MONTHS_AHEAD/12} years out.</div>
+  <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; margin-top:8px;">
+    <details class="footnote" style="margin:0;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Real estate columns come from each loan's real schedule &mdash; rent and costs assumed to hold steady until you update them. Columns marked ~ are investments, projected at the current rate &mdash; not guaranteed, since markets move. Row for ${fmtMonth(TODAY)} is highlighted as the current month. Showing ${INCOME_MONTHS_AHEAD/12} years out.</div></details>
+    ${allSources.length>5 ? `<span class="link" style="font-size:13px; white-space:nowrap;" onclick="toggleIncomeExpand()">${state.income.expanded?'Show top 5 only':'Expand to show all '+allSources.length+' sources'} &rsaquo;</span>` : ''}
+  </div>
   `;
 }
 
@@ -2206,7 +2371,7 @@ function renderInvActionSheet(){
     <div class="btn-row" style="margin-top:14px;">
       <div class="btn btn-primary" style="${canSubmit?'':'opacity:.5; pointer-events:none;'}" onclick="invAction_submit()">${title}${draft.amount>0?' '+fmt$(Math.min(draft.amount,inv.balance)):''}</div>
     </div>
-    <div class="footnote">${mode==='withdraw' ? 'Money leaves the tracked pool entirely &mdash; balance drops, no destination recorded.' : 'Recorded as a linked debit/credit pair &mdash; the destination\'s balance goes up by the same amount that comes off this one.'}</div>
+    <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">${mode==='withdraw' ? 'Money leaves the tracked pool entirely &mdash; balance drops, no destination recorded.' : 'Recorded as a linked debit/credit pair &mdash; the destination\'s balance goes up by the same amount that comes off this one.'}</div></details>
   </div></div>`;
 }
 
@@ -2294,13 +2459,13 @@ function renderInvCellActionSheet(){
     <div class="btn-row" style="margin-top:14px;">
       <div class="btn btn-primary" style="${canSubmit?'':'opacity:.5; pointer-events:none;'}" onclick="invAction_submitCell('confirmed')">Record</div>
     </div>
-    <div class="footnote">This month is now or in the past, so this updates the real balance immediately.</div>
+    <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">This month is now or in the past, so this updates the real balance immediately.</div></details>
     ` : `
     <div class="btn-row" style="margin-top:14px;">
       <div class="btn btn-planned" style="${canSubmit?'':'opacity:.5; pointer-events:none;'}" onclick="invAction_submitCell('planned')">Plan (purple)</div>
       <div class="btn btn-confirm" style="${canSubmit?'':'opacity:.5; pointer-events:none;'}" onclick="invAction_submitCell('confirmed')">Lock in (teal)</div>
     </div>
-    <div class="footnote">This is a future month, so neither option touches today's real balance &mdash; both just shape the timeline projection from ${fmtMonth(parseD(draft.date))} forward. Reconcile the real balance yourself when it actually happens.</div>
+    <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">This is a future month, so neither option touches today's real balance &mdash; both just shape the timeline projection from ${fmtMonth(parseD(draft.date))} forward. Reconcile the real balance yourself when it actually happens.</div></details>
     `}
     ${draft.editingEventId? `<div style="text-align:center; margin-top:10px;"><button class="btn-ghost-sm" onclick="inv_cancelCellEdit()">Cancel edit</button></div>`:''}
   </div></div>`;
@@ -2392,7 +2557,7 @@ function renderInvestmentDetail(id){
     </tbody>
   </table>
   </div>
-  <div class="footnote" style="margin-bottom:6px;">Assumes the current rate${inv.recurring&&inv.recurring.amount>0?' and recurring contribution hold':' holds'} steady for ${INV_SCHEDULE_MONTHS/12} years &mdash; a projection, not a guarantee. Balance column is the end-of-month total after that month's interest.</div>
+  <details class="footnote" style="margin-bottom:6px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Assumes the current rate${inv.recurring&&inv.recurring.amount>0?' and recurring contribution hold':' holds'} steady for ${INV_SCHEDULE_MONTHS/12} years &mdash; a projection, not a guarantee. Balance column is the end-of-month total after that month's interest.</div></details>
 
   <div class="section-label" style="margin-top:22px;">History</div>
   ${events.length===0 ? `<div class="dim" style="font-size:12.5px;">No withdrawals, deposits, or transfers yet.</div>` : events.map(e=>`
@@ -2409,7 +2574,7 @@ function renderInvestmentDetail(id){
   </div>`).join('')}
   <div style="text-align:center; margin-top:18px;"><span class="link" style="color:var(--danger); font-size:13px;" onclick="if(confirm('Delete ${inv.name.replace(/'/g,"\\'")}?')) inv_delete('${id}')">Delete investment</span></div>
   `}
-  <div class="footnote" style="margin-bottom:18px;">${inv.isSample?'Sample entry with placeholder numbers &mdash; replace with a real account when ready. ':''}Balance is what you tell it, not computed &mdash; update it whenever you check a real statement. Rate holds steady until you change it here.</div>
+  <details class="footnote" style="margin-bottom:6px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">${inv.isSample?'Sample entry with placeholder numbers &mdash; replace with a real account when ready. ':''}Balance is what you tell it, not computed &mdash; update it whenever you check a real statement. Rate holds steady until you change it here.</div></details>
   `;
 }
 
@@ -2432,13 +2597,13 @@ function renderGoalsPlaceholder(){
     <div class="row-line"><span class="l">123 Example St</span><span class="v">${fmtRatio(montanaIP)} &rarr; target 2.0x</span></div>
     <div class="row-line"><span class="l">456 Sample Ave</span><span class="v">${fmtRatio(barneyIP)} &rarr; target 2.0x</span></div>
     <div style="text-align:right; margin-top:8px;"><span class="link" style="font-size:13px;" onclick="push({type:'prepay'})">Pay down debt or invest? &rsaquo;</span></div>
-    <div class="footnote">Every other loan is already under 2.0x &mdash; not urgent, lowest priority for leftover cash.</div>
+    <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Every other loan is already under 2.0x &mdash; not urgent, lowest priority for leftover cash.</div></details>
   </div>
   <div class="section-label">Standing option &middot; next-door property</div>
   <div class="card">
     <div class="dim" style="font-size:13px;">One-time opportunity &mdash; reserve capital held ready rather than competing with the other goals for priority.</div>
   </div>
-  <div class="footnote" style="margin-bottom:18px;">999 Test Commercial Way pays off ${fmtMonth(payoffDate)}, freeing ~${fmt$(pmtFor(gallatin))}/mo toward these goals.</div>
+  <details class="footnote" style="margin-bottom:6px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">999 Test Commercial Way pays off ${fmtMonth(payoffDate)}, freeing ~${fmt$(pmtFor(gallatin))}/mo toward these goals.</div></details>
   `;
 }
 
@@ -2475,7 +2640,7 @@ function renderSettings(){
         <span class="dim" style="font-size:12.5px;">%</span>
       </span>
     </div>`).join('')}
-    <div class="footnote">Locked in per management contract &mdash; only change this when the contract itself changes, not for routine cost updates.</div>
+    <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Locked in per management contract &mdash; only change this when the contract itself changes, not for routine cost updates.</div></details>
   </div>
 
   <div class="section-label">Defaults for new analysis</div>
@@ -2498,7 +2663,7 @@ function renderSettings(){
   <div class="card">
     <div class="row-line"><span class="l">123 Example &mdash; refinanced</span><span class="v" style="font-family:var(--font-ui); font-weight:600;">Jan 2024</span></div>
     <div class="row-line"><span class="l">456 Sample Ave &mdash; loan added</span><span class="v" style="font-family:var(--font-ui); font-weight:600;">Jun 2024</span></div>
-    <div class="row-line"><span class="l">999 Test Commercial Way &mdash; 2 lump payments</span><span class="v" style="font-family:var(--font-ui); font-weight:600;">Mar '20, Jun '20</span></div>
+    <div class="row-line"><span class="l">999 Test Commercial Way &mdash; 2 lump payments</span><span class="v" style="font-family:var(--font-ui); font-weight:600;">Mar '22, Feb '23</span></div>
     <div style="text-align:right; margin-top:8px;"><span class="link" style="font-size:13px;">Full event log &rsaquo;</span></div>
   </div>
 
@@ -2509,19 +2674,16 @@ function renderSettings(){
     <div class="row-line"><span class="l">Import data (.json)</span><button class="selectchip" onclick="triggerImport()">Import</button></div>
     <input id="importFileInput" type="file" accept="application/json,.json" style="display:none" onchange="handleImportFile(this)"/>
   </div>
-  <div class="footnote" style="margin-bottom:18px;">Everything you enter is saved on this device automatically. Export creates a file you can send to someone else (or save to a shared folder like iCloud Drive) &mdash; they Import it into their own copy to get your numbers. Nothing is ever uploaded anywhere on its own.</div>
+  <details class="footnote" style="margin-bottom:6px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Everything you enter is saved on this device automatically. Export creates a file you can send to someone else (or save to a shared folder like iCloud Drive) &mdash; they Import it into their own copy to get your numbers. Nothing is ever uploaded anywhere on its own.</div></details>
   `;
 }
 
 loadLocalData();
 render();
 </script>
-
 <script>
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
-  });
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(()=>{}));
 }
 </script>
 </body>
