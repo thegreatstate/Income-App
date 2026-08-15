@@ -78,6 +78,7 @@ html,body{margin:0; height:100%; overflow:hidden; background:var(--bg);}
   width:402px; max-width:100%; height:min(854px, 96vh); background:var(--surface);
   border-radius:44px; border:1px solid var(--border); box-shadow:0 30px 80px -20px rgba(0,0,0,.5), 0 0 0 8px color-mix(in srgb, var(--bg) 60%, black 10%);
   overflow:hidden; display:flex; flex-direction:column; position:relative;
+  padding-top:calc(env(safe-area-inset-top) + 10px); padding-bottom:calc(env(safe-area-inset-bottom) + 10px);
 }
 .screen{ flex:1; overflow-y:auto; overflow-x:hidden; padding:18px 18px 8px; position:relative; }
 .screen::-webkit-scrollbar{width:0;}
@@ -239,8 +240,8 @@ details.legend-box p{ margin:8px 0 0; }
 .az-section-summary{ font-size:12.5px; color:var(--text-dim); font-weight:500; font-family:var(--font-mono); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
 .az-section-body{ padding:2px 15px 15px;}
 @media (max-width:480px){
-  .stage{ height:auto; min-height:0; padding:10px; }
-  .phone{ width:100%; max-width:460px; height:760px; max-height:none; border-radius:26px; }
+  .stage{ height:100dvh; min-height:100dvh; padding:0; }
+  .phone{ width:100%; max-width:none; height:100dvh; max-height:none; border-radius:0; border:none; box-shadow:none; }
 }
 </style>
 </head>
@@ -454,6 +455,7 @@ function propertyProgress(prop){
   return Math.max(0, Math.min(1, (orig-bal)/orig));
 }
 function unitRentAtDate(u, date){
+  if((u.vacancies||[]).some(v=> date>=parseD(v.start) && date<=parseD(v.end))) return 0;
   let rent = u.rent;
   (u.increases||[]).slice().sort((a,b)=>parseD(a.date)-parseD(b.date)).forEach(inc=>{
     const start = parseD(inc.date);
@@ -1003,12 +1005,40 @@ function unitIncrease_delete(propId, idx, incId){
   u.increases = (u.increases||[]).filter(x=>x.id!==incId);
   render();
 }
+let _nextVacancyId=1;
+function newVacancyId(){ return 'vac'+(_nextVacancyId++); }
+function unitVacancy_add(propId, idx){
+  const p = findProperty(propId); const u = p.units[idx];
+  u.vacancies = u.vacancies||[];
+  const start = mkey(addM(TODAY,1))+'-01';
+  u.vacancies.push({ id:newVacancyId(), start, end: mkey(addM(parseD(start),2))+'-01' });
+  render();
+}
+function unitVacancy_setStart(propId, idx, vacId, val){
+  const u = findProperty(propId).units[idx];
+  const v = (u.vacancies||[]).find(x=>x.id===vacId);
+  if(v && val) v.start = val+'-01';
+  render();
+}
+function unitVacancy_setEnd(propId, idx, vacId, val){
+  const u = findProperty(propId).units[idx];
+  const v = (u.vacancies||[]).find(x=>x.id===vacId);
+  if(v && val) v.end = val+'-01';
+  render();
+}
+function unitVacancy_delete(propId, idx, vacId){
+  const u = findProperty(propId).units[idx];
+  u.vacancies = (u.vacancies||[]).filter(x=>x.id!==vacId);
+  render();
+}
 function unitRow(propId, u, idx, editing){
   const increases = (u.increases||[]).slice().sort((a,b)=>parseD(a.date)-parseD(b.date));
+  const vacancies = (u.vacancies||[]).slice().sort((a,b)=>parseD(a.start)-parseD(b.start));
   const label = `${u.label}${u.beds?` &middot; ${u.beds}bd`:''}`;
   if(!editing){
     return `<div class="row-line"><span class="l">${label}</span><span class="v">${fmt$(u.rent)}/mo</span></div>
-    ${increases.map(inc=>`<div class="dim" style="font-size:11px; margin:-2px 0 4px; padding-left:2px;">+${inc.pct}%${inc.recurring?' every year':''} starting ${fmtMonth(parseD(inc.date))}</div>`).join('')}`;
+    ${increases.map(inc=>`<div class="dim" style="font-size:11px; margin:-2px 0 4px; padding-left:2px;">+${inc.pct}%${inc.recurring?' every year':''} starting ${fmtMonth(parseD(inc.date))}</div>`).join('')}
+    ${vacancies.map(v=>`<div class="dim" style="font-size:11px; margin:-2px 0 4px; padding-left:2px; color:var(--danger);">Vacant ${fmtMonth(parseD(v.start))} &ndash; ${fmtMonth(parseD(v.end))}</div>`).join('')}`;
   }
   return `<div class="row-line"><span class="l">${label}</span><input id="in-unit-${idx}" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-unit-'+idx,u.rent)}" oninput="RAW['in-unit-${idx}']=this.value; rev_set('${propId}',${idx},this.value)"/></div>
   ${increases.map(inc=>`<div class="cost-row" style="margin:4px 0 8px; padding-left:10px;">
@@ -1023,7 +1053,42 @@ function unitRow(propId, u, idx, editing){
     </div>
     <div style="text-align:right; margin-top:4px;"><span class="link" style="color:var(--danger); font-size:11px;" onclick="unitIncrease_delete('${propId}',${idx},'${inc.id}')">Remove</span></div>
   </div>`).join('')}
-  <div style="text-align:right; margin:0 0 10px;"><span class="link" style="font-size:11px;" onclick="unitIncrease_add('${propId}',${idx})">+ Add scheduled increase</span></div>`;
+  <div style="text-align:right; margin:0 0 8px;"><span class="link" style="font-size:11px;" onclick="unitIncrease_add('${propId}',${idx})">+ Add scheduled increase</span></div>
+  ${vacancies.map(v=>`<div class="cost-row" style="margin:4px 0 8px; padding-left:10px;">
+    <div class="top" style="gap:8px;">
+      <span class="faint" style="font-size:11px;">Vacant</span>
+      <input type="month" value="${mkey(parseD(v.start))}" oninput="unitVacancy_setStart('${propId}',${idx},'${v.id}',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-mono); font-size:13px; font-weight:600; outline:none; flex:1; min-width:0;"/>
+      <span class="faint" style="font-size:11px;">to</span>
+      <input type="month" value="${mkey(parseD(v.end))}" oninput="unitVacancy_setEnd('${propId}',${idx},'${v.id}',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-mono); font-size:13px; font-weight:600; outline:none; flex:1; min-width:0;"/>
+    </div>
+    <div style="text-align:right; margin-top:4px;"><span class="link" style="color:var(--danger); font-size:11px;" onclick="unitVacancy_delete('${propId}',${idx},'${v.id}')">Remove</span></div>
+  </div>`).join('')}
+  <div style="text-align:right; margin:0 0 10px;"><span class="link" style="font-size:11px;" onclick="unitVacancy_add('${propId}',${idx})">+ Mark vacant</span></div>`;
+}
+/* ---- Timeline cell click -> quick actions (properties & standalone loans) ---- */
+function prop_openCellAction(propId, dateStr){
+  state.propCellDate = dateStr;
+  openSheet({type:'propCellChoice', id:propId});
+}
+function prop_cellGoRevenue(propId){
+  push({type:'loan', id:propId});
+  openSheet({type:'revenue', id:propId});
+  state.sheetEdit = true;
+  render();
+}
+function prop_cellGoVacancy(propId){
+  prop_cellGoRevenue(propId);
+}
+function prop_cellGoPlanner(propId){
+  const dateStr = state.propCellDate;
+  plannerFor(propId).date = dateStr;
+  push({type:'loan', id:propId});
+  openSheet({type:'planner', id:propId});
+}
+function loan_openCellAction(loanId, dateStr){
+  plannerFor(loanId).date = dateStr;
+  push({type:'loan', id:loanId});
+  openSheet({type:'planner', id:loanId});
 }
 const editFieldStyle='width:92px; text-align:right; background:var(--surface-3); border:1px solid var(--border); border-radius:8px; padding:6px 8px; font-family:var(--font-mono); font-size:14px; font-weight:600; color:var(--text);';
 
@@ -1103,6 +1168,20 @@ function renderSheet(){
   if(s.type==='analyzerDetail'){
     const p = analyzerSamples.find(x=>x.id===s.id);
     return (p && p.kind==='investment') ? renderAnalyzerInvestmentDetail(s.id) : renderAnalyzerDetail(s.id);
+  }
+  if(s.type==='propCellChoice'){
+    const prop = findProperty(s.id);
+    const dateStr = state.propCellDate;
+    return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
+      <div class="sheet-handle"></div>
+      ${sheetHead(fmtMonth(parseD(dateStr)), prop.name, false)}
+      <div class="dim" style="font-size:13px; margin-bottom:14px;">What do you want to adjust for this month?</div>
+      <div class="btn-row" style="flex-direction:column; gap:8px;">
+        <div class="btn btn-primary" onclick="prop_cellGoRevenue('${prop.id}')">Rent increase</div>
+        <div class="btn btn-primary" onclick="prop_cellGoPlanner('${prop.id}')">Extra payment</div>
+        <div class="btn btn-primary" onclick="prop_cellGoVacancy('${prop.id}')">Mark vacant</div>
+      </div>
+    </div></div>`;
   }
   if(s.type==='analyzerAddChoice'){
     return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
@@ -2204,8 +2283,11 @@ function renderIncomeTimeline(cols, months, series){
         <td style="font-weight:700; color:${rowTotal>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(rowTotal)}</td>
         ${cols.map(c=>{
           const v = series.bySourceId[c.id][i];
-          if(c.kind!=='investment'){
-            return `<td style="color:${v>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(v)}</td>`;
+          if(c.kind==='property'){
+            return `<td style="color:${v>=0?'var(--principal)':'var(--interest)'}; cursor:pointer;" onclick="prop_openCellAction('${c.id.slice(5)}','${dateKey}')">${fmtSigned$(v)}</td>`;
+          }
+          if(c.kind==='loan'){
+            return `<td style="color:${v>=0?'var(--principal)':'var(--interest)'}; cursor:pointer;" onclick="loan_openCellAction('${c.id.slice(5)}','${dateKey}')">${fmtSigned$(v)}</td>`;
           }
           const inv = findInvestment(c.id.slice(4));
           const cellEvents = invCellEvents(inv, dateKey);
