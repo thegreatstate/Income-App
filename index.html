@@ -309,6 +309,15 @@ function allLoansOf(prop){ return [...prop.loans, ...(prop.otherLoans||[])]; }
 let _nextStandaloneLoanId = 1;
 function newStandaloneLoanId(){ return 'sl'+(_nextStandaloneLoanId++); }
 const standaloneLoans = [];
+/* Household-level spending overrides — e.g. a bigger draw Oct-Dec to cover an estimated tax bill,
+   then automatically back to the normal baseline after the end date. */
+let _nextSpendingOverrideId = 1;
+function newSpendingOverrideId(){ return 'sov'+(_nextSpendingOverrideId++); }
+const householdSpendingOverrides = [];
+function effectiveSpendingAtDate(date){
+  const hit = householdSpendingOverrides.find(o=> date>=parseD(o.start) && date<=parseD(o.end));
+  return hit ? hit.amount : (state.settings.monthlySpending||0);
+}
 function findStandaloneLoan(id){ return standaloneLoans.find(l=>l.id===id); }
 
 /* ============ INVESTMENTS (real balances/rates, manually reconciled) ============ */
@@ -332,7 +341,7 @@ function householdSpendableTotal(date, excludeInvId){
 function sweepAmountAtDate(inv, date, currentBal){
   const ownReturn = (currentBal||0)*(inv.rate||0)/100/12;
   const total = householdSpendableTotal(date, inv.id) + ownReturn;
-  return Math.max(0, total - (state.settings.monthlySpending||0));
+  return Math.max(0, total - effectiveSpendingAtDate(date));
 }
 function newInvId(){ return 'inv'+(_nextInvId++); }
 function newInvEventId(){ return 'ie'+(_nextInvEventId++); }
@@ -377,7 +386,7 @@ function invMonthlyReturnSeries(inv, monthsCount, sweepSeries){
         if(inv.recurring.autoSweep){
           const ownReturn = bal*(inv.rate||0)/100/12;
           const total = (sweepSeries?sweepSeries[i]:0) + ownReturn;
-          bal += Math.max(0, total - (state.settings.monthlySpending||0));
+          bal += Math.max(0, total - effectiveSpendingAtDate(date));
         }
         else if(inv.recurring.amount>0) bal += (inv.recurring.direction==='debit'?-1:1)*inv.recurring.amount;
       }
@@ -577,13 +586,13 @@ function portfolioYearsLeft(weighted){
 }
 
 /* ============ FORMATTERS ============ */
-const state = { tab:'income', pushed:null, sheet:null, sheetEdit:false, sort:'balance', sortDir:1,
+const state = { tab:'income', pushed:null, sheet:null, sheetEdit:false, propEdit:false, sort:'balance', sortDir:1,
   settings:{ showCents:false, weightedYears:true, monthlySpending:0 },
   planner:{}, analyzerSel:{}, azSections:{},
   cas:{ selectedId:'montana2', customBalance:350000, customRate:5.99, customTermYears:27,
     prepay:50000, grossReturn:4.5, taxRate:24, horizonKey:'5', horizonYearsCustom:5,
     ipThreshold:2.0, compareSort:'net' },
-  income:{ sortDir:-1, sortKey:'amount', expanded:false, invEdit:false, invDraft:null },
+  income:{ sortDir:-1, sortKey:'amount', expanded:false, invEdit:false, invDraft:null, investmentsExpanded:false, propertiesExpanded:true },
   lastSyncAt:null
 };
 
@@ -591,7 +600,7 @@ const state = { tab:'income', pushed:null, sheet:null, sheetEdit:false, sort:'ba
 const FINAPP_STORAGE_KEY = 'finapp-data-v1';
 function saveLocalData(){
   try{
-    const payload = { version:1, properties, investments, analyzerSamples, standaloneLoans, settings: state.settings, lastSyncAt: state.lastSyncAt||null };
+    const payload = { version:1, properties, investments, analyzerSamples, standaloneLoans, householdSpendingOverrides, settings: state.settings, lastSyncAt: state.lastSyncAt||null };
     localStorage.setItem(FINAPP_STORAGE_KEY, JSON.stringify(payload));
   }catch(e){}
 }
@@ -604,6 +613,7 @@ function loadLocalData(){
     if(Array.isArray(data.investments)) investments.splice(0, investments.length, ...data.investments);
     if(Array.isArray(data.analyzerSamples)) analyzerSamples.splice(0, analyzerSamples.length, ...data.analyzerSamples);
     if(Array.isArray(data.standaloneLoans)) standaloneLoans.splice(0, standaloneLoans.length, ...data.standaloneLoans);
+    if(Array.isArray(data.householdSpendingOverrides)) householdSpendingOverrides.splice(0, householdSpendingOverrides.length, ...data.householdSpendingOverrides);
     if(data.settings) Object.assign(state.settings, data.settings);
     if(data.lastSyncAt) state.lastSyncAt = data.lastSyncAt;
   }catch(e){}
@@ -614,7 +624,7 @@ function fmtDateTime(iso){
   return d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})+' at '+d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
 }
 function exportData(){
-  const payload = { version:1, properties, investments, analyzerSamples, standaloneLoans, settings: state.settings, exportedAt: new Date().toISOString() };
+  const payload = { version:1, properties, investments, analyzerSamples, standaloneLoans, householdSpendingOverrides, settings: state.settings, exportedAt: new Date().toISOString() };
   state.lastSyncAt = payload.exportedAt;
   const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
@@ -639,6 +649,7 @@ function handleImportFile(input){
       if(Array.isArray(data.investments)) investments.splice(0, investments.length, ...data.investments);
       if(Array.isArray(data.analyzerSamples)) analyzerSamples.splice(0, analyzerSamples.length, ...data.analyzerSamples);
       if(Array.isArray(data.standaloneLoans)) standaloneLoans.splice(0, standaloneLoans.length, ...data.standaloneLoans);
+      if(Array.isArray(data.householdSpendingOverrides)) householdSpendingOverrides.splice(0, householdSpendingOverrides.length, ...data.householdSpendingOverrides);
       if(data.settings) Object.assign(state.settings, data.settings);
       state.lastSyncAt = data.exportedAt || new Date().toISOString();
       for(const k in SCHED) delete SCHED[k];
@@ -680,8 +691,9 @@ function tabIcon(name){ return '<svg viewBox="0 0 24 24">'+ICON[name]+'</svg>'; 
 const RAW = {};
 function rv(id, fallback){ return RAW[id]!==undefined ? RAW[id] : String(fallback); }
 function goTab(t){ state.tab=t; state.pushed=null; state.sheet=null; state._resetScroll=true; for(const k in RAW) delete RAW[k]; render(); }
-function push(view){ state.pushed=view; state._resetScroll=true; state.azSections={}; for(const k in RAW) delete RAW[k]; render(); }
-function goBack(){ state.pushed=null; state._resetScroll=true; state.azSections={}; for(const k in RAW) delete RAW[k]; render(); }
+function push(view){ state.pushed=view; state.propEdit=false; state._resetScroll=true; state.azSections={}; for(const k in RAW) delete RAW[k]; render(); }
+function goBack(){ state.pushed=null; state.propEdit=false; state._resetScroll=true; state.azSections={}; for(const k in RAW) delete RAW[k]; render(); }
+function togglePropEdit(){ state.propEdit = !state.propEdit; render(); }
 function backLabel(){ return {income:'Income', portfolio:'Portfolio', analyzer:'Analyzer'}[state.tab] || 'Back'; }
 function openSheet(view){ state.sheet=view; state.sheetEdit=false; state.plannerInfoOpen=false; state.azSections={}; for(const k in RAW) delete RAW[k]; render(); }
 function togglePlannerInfo(){ state.plannerInfoOpen=!state.plannerInfoOpen; render(); }
@@ -902,17 +914,70 @@ function renderPropCard(prop){
       <div class="metric ip"><div class="v">${fmtRatio(c.ip)}</div><div class="l">I/P ratio</div></div>
     </div>
     ${otherBal>0? `<div class="dim" style="font-size:11px; margin-top:10px;">+ ${fmt$(otherBal)} in remodel loans (${prop.otherLoans.map(l=>l.label.split(' note')[0]).join(', ')}) &middot; counted in total debt, not this I/P</div>`:''}
-    ${linkGridRow(prop, cf, 'event.stopPropagation(); ')}
+    ${linkGridRow(prop, cf)}
   </div>`;
 }
-function linkGridRow(prop, cf, stop){
+function linkGridRow(prop, cf){
   const costs = propertyCosts(prop);
   const revenue = propertyRevenue(prop);
   return `<div class="link-grid cols4" style="margin:10px 0 0;">
-    <div style="text-align:left;"><span class="link" onclick="${stop}openSheet({type:'interest', id:'${prop.id}'})">Interest &rsaquo;</span><div class="subval mono" style="color:var(--interest)">${fmt$(propertyCurrent(prop).interest)}/mo</div></div>
-    <div style="text-align:center;"><span class="link" onclick="${stop}openSheet({type:'costs', id:'${prop.id}'})">Costs &rsaquo;</span><div class="subval mono" style="color:var(--interest)">${fmt$(costs.total)}/mo</div></div>
-    <div style="text-align:center;"><span class="link" onclick="${stop}openSheet({type:'revenue', id:'${prop.id}'})">Revenue &rsaquo;</span><div class="subval mono" style="color:var(--principal)">${fmt$(revenue)}/mo</div></div>
-    <div style="text-align:right;"><span class="link" onclick="${stop}openSheet({type:'costs', id:'${prop.id}'})">Profit &rsaquo;</span><div class="subval mono" style="color:${cf>=0?'var(--principal)':'var(--interest)'}">${fmtSigned$(cf)}/mo</div></div>
+    <div style="text-align:left;"><span class="dim" style="font-size:13px;">Interest</span><div class="subval mono" style="color:var(--interest)">${fmt$(propertyCurrent(prop).interest)}/mo</div></div>
+    <div style="text-align:center;"><span class="dim" style="font-size:13px;">Costs</span><div class="subval mono" style="color:var(--interest)">${fmt$(costs.total)}/mo</div></div>
+    <div style="text-align:center;"><span class="dim" style="font-size:13px;">Revenue</span><div class="subval mono" style="color:var(--principal)">${fmt$(revenue)}/mo</div></div>
+    <div style="text-align:right;"><span class="dim" style="font-size:13px;">Profit</span><div class="subval mono" style="color:${cf>=0?'var(--principal)':'var(--interest)'}">${fmtSigned$(cf)}/mo</div></div>
+  </div>`;
+}
+/* ---- Shared Revenue/Costs/Interest sections, inlined on the property's own detail page
+   instead of separate sheets — every editable thing about a property lives on one page. ---- */
+function renderRevenueSection(prop, editing){
+  const gross = propertyRevenue(prop);
+  return `
+  <div class="section-label" id="section-revenue" style="margin-top:18px;">Revenue</div>
+  <div class="card">
+    ${prop.units.map((u,i)=>unitRow(prop.id, u, i, editing)).join('')}
+    <div class="row-line"><span class="l">Gross rent</span><span class="v">${fmt$(gross)}</span></div>
+  </div>`;
+}
+function renderCostsSection(prop, editing){
+  const costs = propertyCosts(prop);
+  return `
+  <div class="section-label" id="section-costs" style="margin-top:18px;">Costs</div>
+  <div class="card">
+    ${costs.pmt>0.005?`<div class="row-line"><span class="l">Mortgage P&amp;I</span><span class="v">${fmt$(costs.pmt)}</span></div>`:''}
+    ${costs.otherPmt>0.005? `<div class="row-line"><span class="l">Other notes P&amp;I</span><span class="v">${fmt$(costs.otherPmt)}</span></div>`:''}
+    ${prop.nnn ? `<details class="legend-box"><summary class="info-btn">&#9432;</summary><p>Triple-net lease &mdash; both tenants pay taxes, insurance, and maintenance directly. The mortgage payment is the only owner-side cost.</p></details>` : `
+    <div class="cost-row">
+      <div class="top"><span class="l">PM fee (${prop.pmPct}% of rent)${prop.pmPctAssumed?' <span class="faint">&middot; assumed</span>':''}</span><span class="v">${fmt$(costs.pm)}</span></div>
+      <div class="asof">${prop.pmPctDate?`As of ${fmtMonth(parseD(prop.pmPctDate))}`:'Not yet confirmed'} &middot; <span class="link" style="font-size:10.5px;" onclick="goToPMSettings()">Edit in Settings &rsaquo;</span></div>
+    </div>
+    ${costPeriodicRow(prop.id, prop, 'taxes', 'Taxes', editing)}
+    ${costPeriodicRow(prop.id, prop, 'insurance', 'Insurance', editing)}
+    ${costFieldRow(prop.id, prop, 'maintenancePct', 'Maintenance (% of rent/yr)', editing,
+      `<span class="v">${fmt$(costs.maintenance)}</span>`,
+      `<input id="in-maintenancePct" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-maintenancePct',prop.maintenancePct)}" oninput="RAW['in-maintenancePct']=this.value; cost_set('${prop.id}','maintenancePct',this.value)"/>`)}
+    <div class="dim" style="font-size:11px; text-transform:uppercase; letter-spacing:.06em; font-weight:700; margin-top:14px; margin-bottom:2px;">Other recurring costs</div>
+    ${(prop.customCosts||[]).map(c=>customCostRow(prop.id, c, editing)).join('')}
+    ${editing ? `<div style="text-align:center; margin-top:8px;"><button class="btn-ghost-sm" onclick="customCost_add('${prop.id}')">+ Add cost</button></div>` : ((prop.customCosts||[]).length===0 ? `<div class="dim" style="font-size:12px;">None yet &mdash; e.g. trash, water, internet.</div>` : '')}
+    `}
+    <div class="row-line"><span class="l">Total monthly costs</span><span class="v">${fmt$(costs.total)}</span></div>
+    ${!prop.nnn?`<details class="legend-box"><summary class="info-btn">&#9432;</summary><p>Set Taxes and Insurance to however they actually get paid &mdash; yearly, quarterly, or monthly &mdash; and enter that period's amount; it's converted to a monthly cost automatically. The date is just an approximation of when it's last/next due, for your own reference.</p></details>`:''}
+  </div>`;
+}
+function renderInterestSection(prop){
+  let origTotal=0, paidTotal=0, remTotal=0;
+  allLoansOf(prop).forEach(l=>{ origTotal+=originalLifetimeInterest(l); paidTotal+=paidToDate(l.id); remTotal+=remainingProjected(l.id); });
+  const currentTotal = paidTotal+remTotal;
+  const saved = origTotal-currentTotal;
+  return `
+  <div class="section-label" id="section-interest" style="margin-top:18px;">Interest</div>
+  <div class="card">
+    <div class="row-line"><span class="l">Original projected interest (through payoff)</span><span class="v">${fmt$(origTotal)}</span></div>
+    <div class="row-line"><span class="l">Interest paid to date</span><span class="v" style="color:var(--interest)">${fmt$(paidTotal)}</span></div>
+    <div class="row-line"><span class="l">Remaining projected interest</span><span class="v">${fmt$(remTotal)}</span></div>
+    <div class="row-line"><span class="l">Current projected lifetime interest</span><span class="v">${fmt$(currentTotal)}</span></div>
+    <div class="row-line"><span class="l">Confirmed interest saved</span><span class="v" style="color:var(--principal)">${fmt$(saved)}</span></div>
+    <div class="row-line"><span class="l">Original amount, combined</span><span class="v">${fmt$(propertyOriginal(prop))}</span></div>
+    <details class="legend-box"><summary class="info-btn">&#9432;</summary><p>Includes every loan tied to this property. These amounts assume scheduled payments continue and include only confirmed extra payments already made &mdash; planned (not yet locked in) extra payments are excluded.${prop.prior?` Prior note: ${fmt$(prop.prior.original)} @ ${fmtPct(prop.prior.rate)}, opened ${fmtMonth(parseD(prop.prior.start))}, closed via refinance ${fmtMonth(parseD(prop.prior.end))} with a ${fmt$(prop.prior.payoff)} payoff.`:''}</p></details>
   </div>`;
 }
 
@@ -1119,25 +1184,16 @@ function unitRow(propId, u, idx, editing){
   </div>`).join('')}
   <div style="text-align:right; margin:0 0 10px;"><span class="link" style="font-size:11px;" onclick="unitVacancy_add('${propId}',${idx})">+ Mark vacant</span></div>`;
 }
-/* ---- Timeline cell click -> quick actions (properties & standalone loans) ---- */
+/* ---- Timeline cell click -> jump straight to that item's own detail page, in edit mode,
+   scrolled to Revenue — no chooser, same landing spot every time a property cell is clicked. ---- */
 function prop_openCellAction(propId, dateStr){
-  state.propCellDate = dateStr;
-  openSheet({type:'propCellChoice', id:propId});
-}
-function prop_cellGoRevenue(propId){
   push({type:'loan', id:propId});
-  openSheet({type:'revenue', id:propId});
-  state.sheetEdit = true;
+  state.propEdit = true;
   render();
-}
-function prop_cellGoVacancy(propId){
-  prop_cellGoRevenue(propId);
-}
-function prop_cellGoPlanner(propId){
-  const dateStr = state.propCellDate;
-  plannerFor(propId).date = dateStr;
-  push({type:'loan', id:propId});
-  openSheet({type:'planner', id:propId});
+  requestAnimationFrame(()=>{
+    const el = document.getElementById('section-revenue');
+    if(el) el.scrollIntoView({behavior:'smooth', block:'start'});
+  });
 }
 function loan_openCellAction(loanId, dateStr){
   plannerFor(loanId).date = dateStr;
@@ -1155,87 +1211,53 @@ function sheetHead(title, propName, showEdit){
 
 function renderSheet(){
   const s = state.sheet;
-  if(s.type==='interest'){
-    const prop = findProperty(s.id);
-    let origTotal=0, paidTotal=0, remTotal=0;
-    allLoansOf(prop).forEach(l=>{ origTotal+=originalLifetimeInterest(l); paidTotal+=paidToDate(l.id); remTotal+=remainingProjected(l.id); });
-    const currentTotal = paidTotal+remTotal;
-    const saved = origTotal-currentTotal;
-    return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
-      <div class="sheet-handle"></div>
-      ${sheetHead('Interest Breakdown', prop.name, false)}
-      <div class="row-line"><span class="l">Original projected interest (through payoff)</span><span class="v">${fmt$(origTotal)}</span></div>
-      <div class="row-line"><span class="l">Interest paid to date</span><span class="v" style="color:var(--interest)">${fmt$(paidTotal)}</span></div>
-      <div class="row-line"><span class="l">Remaining projected interest</span><span class="v">${fmt$(remTotal)}</span></div>
-      <div class="row-line"><span class="l">Current projected lifetime interest</span><span class="v">${fmt$(currentTotal)}</span></div>
-      <div class="row-line"><span class="l">Confirmed interest saved</span><span class="v" style="color:var(--principal)">${fmt$(saved)}</span></div>
-      <div class="row-line"><span class="l">Original amount, combined</span><span class="v">${fmt$(propertyOriginal(prop))}</span></div>
-      <details class="legend-box"><summary class="info-btn">&#9432;</summary><p>Includes every loan tied to this property. These amounts assume scheduled payments continue and include only confirmed extra payments already made &mdash; planned (not yet locked in) extra payments are excluded.${prop.prior?` Prior note: ${fmt$(prop.prior.original)} @ ${fmtPct(prop.prior.rate)}, opened ${fmtMonth(parseD(prop.prior.start))}, closed via refinance ${fmtMonth(parseD(prop.prior.end))} with a ${fmt$(prop.prior.payoff)} payoff.`:''}</p></details>
-    </div></div>`;
-  }
-  if(s.type==='costs'){
-    const prop = findProperty(s.id);
-    const costs = propertyCosts(prop);
-    const cf = propertyCashFlow(prop);
-    const editing = state.sheetEdit;
-    return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
-      <div class="sheet-handle"></div>
-      ${sheetHead('Costs', prop.name, !prop.nnn)}
-      <div class="row-line"><span class="l">Net cash flow (rent &minus; costs)</span><span class="v" style="color:${cf>=0?'var(--principal)':'var(--interest)'}">${fmtSigned$(cf)}</span></div>
-      <div class="row-line"><span class="l">Mortgage P&amp;I</span><span class="v">${fmt$(costs.pmt)}</span></div>
-      ${costs.otherPmt>0.005? `<div class="row-line"><span class="l">Other notes P&amp;I</span><span class="v">${fmt$(costs.otherPmt)}</span></div>`:''}
-      ${prop.nnn ? `<details class="legend-box"><summary class="info-btn">&#9432;</summary><p>Triple-net lease &mdash; both tenants pay taxes, insurance, and maintenance directly. The mortgage payment is the only owner-side cost.</p></details>` : `
-      <div class="cost-row">
-        <div class="top"><span class="l">PM fee (${prop.pmPct}% of rent)${prop.pmPctAssumed?' <span class="faint">&middot; assumed</span>':''}</span><span class="v">${fmt$(costs.pm)}</span></div>
-        <div class="asof">${prop.pmPctDate?`As of ${fmtMonth(parseD(prop.pmPctDate))}`:'Not yet confirmed'} &middot; <span class="link" style="font-size:10.5px;" onclick="goToPMSettings()">Edit in Settings &rsaquo;</span></div>
-      </div>
-      ${costPeriodicRow(prop.id, prop, 'taxes', 'Taxes', editing)}
-      ${costPeriodicRow(prop.id, prop, 'insurance', 'Insurance', editing)}
-      ${costFieldRow(prop.id, prop, 'maintenancePct', 'Maintenance (% of rent/yr)', editing,
-        `<span class="v">${fmt$(costs.maintenance)}</span>`,
-        `<input id="in-maintenancePct" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-maintenancePct',prop.maintenancePct)}" oninput="RAW['in-maintenancePct']=this.value; cost_set('${prop.id}','maintenancePct',this.value)"/>`)}
-      <div class="dim" style="font-size:11px; text-transform:uppercase; letter-spacing:.06em; font-weight:700; margin-top:14px; margin-bottom:2px;">Other recurring costs</div>
-      ${(prop.customCosts||[]).map(c=>customCostRow(prop.id, c, editing)).join('')}
-      ${editing ? `<div style="text-align:center; margin-top:8px;"><button class="btn-ghost-sm" onclick="customCost_add('${prop.id}')">+ Add cost</button></div>` : ((prop.customCosts||[]).length===0 ? `<div class="dim" style="font-size:12px;">None yet &mdash; e.g. trash, water, internet.</div>` : '')}
-      `}
-      <div class="row-line"><span class="l">Total monthly costs</span><span class="v">${fmt$(costs.total)}</span></div>
-      ${!prop.nnn?`<details class="legend-box"><summary class="info-btn">&#9432;</summary><p>Set Taxes and Insurance to however they actually get paid &mdash; yearly, quarterly, or monthly &mdash; and enter that period's amount; it's converted to a monthly cost automatically. The date is just an approximation of when it's last/next due, for your own reference.</p></details>`:''}
-    </div></div>`;
-  }
-  if(s.type==='revenue'){
-    const prop = findProperty(s.id);
-    const editing = state.sheetEdit;
-    const gross = propertyRevenue(prop);
-    const cf = propertyCashFlow(prop);
-    return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
-      <div class="sheet-handle"></div>
-      ${sheetHead('Revenue', prop.name, true)}
-      <div class="row-line"><span class="l">Net cash flow (rent &minus; costs)</span><span class="v" style="color:${cf>=0?'var(--principal)':'var(--interest)'}">${fmtSigned$(cf)}</span></div>
-      ${prop.units.map((u,i)=>unitRow(prop.id, u, i, editing)).join('')}
-      <div class="row-line"><span class="l">Gross rent</span><span class="v">${fmt$(gross)}</span></div>
-      <details class="legend-box"><summary class="info-btn">&#9432;</summary><p>Update a unit's rent here whenever a lease renews or changes &mdash; it feeds Costs and cash flow everywhere this property appears.</p></details>
-    </div></div>`;
-  }
   if(s.type==='planner'){
     return renderPlannerSheet(s.id);
+  }
+  if(s.type==='incomeAdjust'){
+    const baseline = state.settings.monthlySpending||0;
+    const overrides = householdSpendingOverrides.slice().sort((a,b)=>parseD(a.start)-parseD(b.start));
+    return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
+      <div class="sheet-handle"></div>
+      ${sheetHead('Income', 'What you draw month to month', false)}
+      <div class="dim" style="font-size:12px; margin-bottom:2px;">Normal monthly draw</div>
+      <div class="input-row"><span class="suffix">$</span><input id="in-monthly-spending-sheet" type="text" inputmode="decimal" value="${rv('in-monthly-spending-sheet',baseline||'')}" oninput="RAW['in-monthly-spending-sheet']=this.value; set_monthlySpending(this.value)"/></div>
+      <div class="dim" style="font-size:11px; text-transform:uppercase; letter-spacing:.06em; font-weight:700; margin-top:16px; margin-bottom:2px;">Scheduled changes</div>
+      ${overrides.map(o=>`<div class="cost-row" style="margin:6px 0;">
+        <div class="top" style="gap:8px;">
+          <input type="month" value="${mkey(parseD(o.start))}" oninput="spendingOverride_setStart('${o.id}',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-mono); font-size:13px; font-weight:600; outline:none; flex:1; min-width:0;"/>
+          <span class="faint" style="font-size:11px;">to</span>
+          <input type="month" value="${mkey(parseD(o.end))}" oninput="spendingOverride_setEnd('${o.id}',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-mono); font-size:13px; font-weight:600; outline:none; flex:1; min-width:0;"/>
+        </div>
+        <div class="top" style="gap:8px; margin-top:6px;">
+          <span class="suffix">$</span>
+          <input type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-sov-amt-'+o.id, o.amount||'')}" oninput="RAW['in-sov-amt-${o.id}']=this.value; spendingOverride_setAmount('${o.id}',this.value)"/>
+          <input type="text" value="${o.note||''}" placeholder="e.g. Tax payment" oninput="spendingOverride_setNote('${o.id}',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-ui); font-size:13px; font-weight:600; outline:none; flex:1; min-width:0;"/>
+        </div>
+        <div style="text-align:right; margin-top:4px;"><span class="link" style="color:var(--danger); font-size:11px;" onclick="spendingOverride_delete('${o.id}')">Remove</span></div>
+      </div>`).join('')}
+      <div style="text-align:center; margin-top:8px;"><button class="btn-ghost-sm" onclick="spendingOverride_add()">+ Add scheduled change</button></div>
+      <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">A scheduled change replaces the normal draw for that date range only &mdash; it automatically goes back to normal the month after it ends. Use this for things like a bigger draw to cover an estimated tax bill.</div></details>
+    </div></div>`;
+  }
+  if(s.type==='growthTarget'){
+    const sweepTarget = currentSweepTarget();
+    const committedInvestments = investments.filter(i=>i.committed!==false);
+    return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
+      <div class="sheet-handle"></div>
+      ${sheetHead('Growth', 'Where the leftover goes', false)}
+      ${committedInvestments.length===0 ? `<div class="dim" style="font-size:13px;">Add an investment first to pick a destination.</div>` : `
+      <div class="sort-row" style="margin-top:0;">
+        ${committedInvestments.map(inv=>`<div class="chip ${sweepTarget&&sweepTarget.id===inv.id?'active':''}" onclick="setSweepTarget('${inv.id}')">${inv.name}</div>`).join('')}
+        ${sweepTarget?`<div class="chip" onclick="clearSweepTarget()">None</div>`:''}
+      </div>
+      `}
+      <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Growth (income minus your draw) is swept into whichever investment is picked here, recalculated fresh every month.</div></details>
+    </div></div>`;
   }
   if(s.type==='analyzerDetail'){
     const p = analyzerSamples.find(x=>x.id===s.id);
     return (p && p.kind==='investment') ? renderAnalyzerInvestmentDetail(s.id) : renderAnalyzerDetail(s.id);
-  }
-  if(s.type==='propCellChoice'){
-    const prop = findProperty(s.id);
-    const dateStr = state.propCellDate;
-    return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
-      <div class="sheet-handle"></div>
-      ${sheetHead(fmtMonth(parseD(dateStr)), prop.name, false)}
-      <div class="dim" style="font-size:13px; margin-bottom:14px;">What do you want to adjust for this month?</div>
-      <div class="btn-row" style="flex-direction:column; gap:8px;">
-        <div class="btn btn-primary" onclick="prop_cellGoRevenue('${prop.id}')">Rent increase</div>
-        <div class="btn btn-primary" onclick="prop_cellGoPlanner('${prop.id}')">Extra payment</div>
-        <div class="btn btn-primary" onclick="prop_cellGoVacancy('${prop.id}')">Mark vacant</div>
-      </div>
-    </div></div>`;
   }
   if(s.type==='analyzerAddChoice'){
     return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
@@ -1371,9 +1393,11 @@ function renderStandaloneLoanDraft(id){
 function renderDebtFreePropertyDetail(propId){
   const prop = findProperty(propId);
   const cf = propertyCashFlow(prop);
+  const editing = state.propEdit;
   return `
   <div class="header-sticky">
     <button class="back" onclick="goBack()">&lsaquo; ${backLabel()}</button>
+    <button class="selectchip" onclick="togglePropEdit()">${editing?'Done':'Edit'}</button>
   </div>
   <div class="card" style="padding:14px 16px;">
     <div style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;">
@@ -1383,8 +1407,10 @@ function renderDebtFreePropertyDetail(propId){
     <div class="big-number" style="margin-top:3px; font-size:27px; color:${cf>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(cf)}/mo</div>
     <div class="dim" style="font-size:11.5px; margin-top:4px;">Debt-free &mdash; no mortgage on this property</div>
   </div>
-  ${linkGridRow(prop, cf, '')}
-  <div class="footnote" style="margin-top:18px;">No loan on this property, so there's no amortization or extra-payment planner to show &mdash; just revenue and costs.</div>
+  ${linkGridRow(prop, cf)}
+  ${renderRevenueSection(prop, editing)}
+  ${renderCostsSection(prop, editing)}
+  <div class="footnote" style="margin-top:18px; margin-bottom:6px;">No loan on this property, so there's no amortization or extra-payment planner to show &mdash; just revenue and costs.</div>
   `;
 }
 function renderLoanDetail(propId){
@@ -1401,11 +1427,15 @@ function renderLoanDetail(propId){
   const pendingCount = pm.plannedList.length + (pm.draft.amount>0 && !pm.draft.editing ? 1 : 0);
   if(pendingCount>0){ planDot = '<span class="dot" style="background:var(--planned)"></span>'; planLabel = pendingCount+' planned'; }
   else if(pm.futureConfirmed.length>0){ planDot = '<span class="dot" style="background:var(--confirmed)"></span>'; planLabel = pm.futureConfirmed.length+' locked in'; }
+  const editing = state.propEdit;
 
   return `
   <div class="header-sticky">
     <button class="back" onclick="goBack()">&lsaquo; ${backLabel()}</button>
-    <button class="plan-trigger" onclick="openSheet({type:'planner', id:'${propId}'})">${planDot}${planLabel}</button>
+    <div style="display:flex; gap:8px;">
+      <button class="plan-trigger" onclick="openSheet({type:'planner', id:'${propId}'})">${planDot}${planLabel}</button>
+      ${!prop.isStandaloneLoan ? `<button class="selectchip" onclick="togglePropEdit()">${editing?'Done':'Edit'}</button>` : ''}
+    </div>
   </div>
 
   <div class="card" style="padding:14px 16px;">
@@ -1431,9 +1461,12 @@ function renderLoanDetail(propId){
     </div>
   </div>
 
-  ${!prop.isStandaloneLoan ? linkGridRow(prop, propertyCashFlow(prop), '') : ''}
+  ${!prop.isStandaloneLoan ? linkGridRow(prop, propertyCashFlow(prop)) : ''}
+  ${!prop.isStandaloneLoan ? renderRevenueSection(prop, editing) : ''}
+  ${!prop.isStandaloneLoan ? renderCostsSection(prop, editing) : ''}
+  ${!prop.isStandaloneLoan ? renderInterestSection(prop) : ''}
 
-  <div class="section-label" style="margin-top:6px;">Amortization</div>
+  <div class="section-label" id="section-amortization" style="margin-top:18px;">Amortization</div>
   <div class="amort-jump" id="amortJump">
     <button id="jump-beginning" onclick="jumpAmort('beginning')">Beginning</button>
     <button id="jump-current" class="active" onclick="jumpAmort('current')">Current</button>
@@ -2411,19 +2444,39 @@ function renderIncome(){
   const sortFn = INCOME_SORTS[sortKey].fn;
   const allSources = incomeSources().sort((a,b)=>(sortFn(a)-sortFn(b))*sortDir);
   const total = allSources.reduce((s,x)=>s+x.amount,0);
+  const spending = effectiveSpendingAtDate(TODAY);
+  const growth = total - spending;
+  const propertySources = allSources.filter(s=>s.kind!=='investment');
+  const investmentSources = allSources.filter(s=>s.kind==='investment');
+  const invExpanded = state.income.investmentsExpanded;
+  const propExpanded = state.income.propertiesExpanded;
+  const committedInvestmentsCount = investments.filter(i=>i.committed!==false).length;
   return `
   <div class="header"><h1>Income</h1><div style="display:flex; gap:8px;"><div class="iconbtn" onclick="inv_openAdd()">+</div><div class="iconbtn" onclick="push({type:'settings'})">${tabIcon('gear')}</div></div></div>
   <div class="card">
-    <div class="dim" style="font-size:12.5px;">Total monthly receivables &mdash; ${fmtMonth(TODAY)}</div>
-    <div class="big-number" style="margin-top:4px; color:${total>=0?'var(--text)':'var(--interest)'};">${fmt$(total)}</div>
-    <div class="dim" style="font-size:11.5px; margin-top:8px;">${properties.length} propert${properties.length===1?'y':'ies'} &middot; ${investments.filter(i=>i.committed!==false).length} investment${investments.filter(i=>i.committed!==false).length===1?'':'s'}</div>
+    <div class="stat-row">
+      <div class="stat-pill"><div class="v" style="color:${total>=0?'var(--text)':'var(--interest)'};">${fmt$(total)}</div><div class="l">${fmtMonth(TODAY)}</div></div>
+      <div class="stat-pill" style="cursor:pointer;" onclick="openSheet({type:'incomeAdjust'})"><div class="v">${fmt$(spending)}</div><div class="l">Income &rsaquo;</div></div>
+      <div class="stat-pill" style="cursor:pointer;" onclick="openSheet({type:'growthTarget'})"><div class="v" style="color:${growth>=0?'var(--principal)':'var(--interest)'}">${fmtSigned$(growth)}</div><div class="l">Growth &rsaquo;</div></div>
+    </div>
+    <div class="dim" style="font-size:11.5px; margin-top:10px;">
+      <span class="link" onclick="togglePropertiesExpanded()">${properties.length} propert${properties.length===1?'y':'ies'}</span>
+      &middot;
+      <span class="link" onclick="toggleInvestmentsExpanded()">${committedInvestmentsCount} investment${committedInvestmentsCount===1?'':'s'}</span>
+    </div>
   </div>
 
-  <div class="sort-row">
+  ${propExpanded ? `
+  <div class="sort-row" style="margin-top:14px;">
     ${Object.entries(INCOME_SORTS).map(([k,v])=>`<div class="chip ${sortKey===k?'active':''}" onclick="setIncomeSort('${k}')">${v.label}${sortKey===k?(sortDir===1?' &uarr;':' &darr;'):''}</div>`).join('')}
   </div>
+  ${propertySources.length===0 ? `<div class="dim" style="font-size:13px; margin-top:10px;">No receivables yet.</div>` : propertySources.map(src=>incomeSourceCard(src)).join('')}
+  ` : ''}
 
-  ${allSources.length===0 ? `<div class="dim" style="font-size:13px; margin-top:10px;">No receivables yet.</div>` : allSources.map(src=>incomeSourceCard(src)).join('')}
+  ${invExpanded ? `
+  <div class="section-label" style="margin-top:18px;">Investments</div>
+  ${investmentSources.length===0 ? `<div class="dim" style="font-size:13px;">No investments yet.</div>` : investmentSources.map(src=>incomeSourceCard(src)).join('')}
+  ` : ''}
 
   <div class="section-label" style="margin-top:22px;">Monthly Timeline</div>
   ${renderIncomeTimelineCached(allSources)}
@@ -2490,6 +2543,30 @@ function inv_setRecurringMode(id, mode){
   render();
 }
 function set_monthlySpending(val){ state.settings.monthlySpending = Math.max(0, numFrom(val)); render(); }
+function spendingOverride_add(){
+  householdSpendingOverrides.push({ id:newSpendingOverrideId(), start: mkey(addM(TODAY,1))+'-01', end: mkey(addM(TODAY,3))+'-01', amount: state.settings.monthlySpending||0, note:'' });
+  render();
+}
+function spendingOverride_setStart(id, val){ const o=householdSpendingOverrides.find(x=>x.id===id); if(o&&val) o.start=val+'-01'; render(); }
+function spendingOverride_setEnd(id, val){ const o=householdSpendingOverrides.find(x=>x.id===id); if(o&&val) o.end=val+'-01'; render(); }
+function spendingOverride_setAmount(id, val){ const o=householdSpendingOverrides.find(x=>x.id===id); if(o) o.amount=Math.max(0, numFrom(val)); render(); }
+function spendingOverride_setNote(id, val){ const o=householdSpendingOverrides.find(x=>x.id===id); if(o) o.note=val; render(); }
+function spendingOverride_delete(id){ const idx=householdSpendingOverrides.findIndex(x=>x.id===id); if(idx>=0) householdSpendingOverrides.splice(idx,1); render(); }
+function togglePropertiesExpanded(){ state.income.propertiesExpanded = !state.income.propertiesExpanded; render(); }
+function currentSweepTarget(){ return investments.find(inv=>inv.committed!==false && inv.recurring && inv.recurring.autoSweep); }
+function setSweepTarget(investmentId){
+  investments.forEach(inv=>{
+    if(inv.id===investmentId){
+      if(!inv.recurring) inv.recurring = { amount:0, direction:'credit', note:'Growth sweep', startDate: mkey(addM(TODAY,1))+'-01', autoSweep:true };
+      else inv.recurring.autoSweep = true;
+    } else if(inv.recurring && inv.recurring.autoSweep){
+      inv.recurring.autoSweep = false;
+    }
+  });
+  render();
+}
+function clearSweepTarget(){ investments.forEach(inv=>{ if(inv.recurring) inv.recurring.autoSweep=false; }); render(); }
+function toggleInvestmentsExpanded(){ state.income.investmentsExpanded = !state.income.investmentsExpanded; render(); }
 
 /* ---- Withdraw / Transfer ---- */
 function inv_openWithdraw(id){
