@@ -319,6 +319,21 @@ const investments = [
   { id:'inv-sample-brk', name:'Brokerage (sample)', isSample:true, balance:25000, rate:7.0, rateDate:null, balanceDate:null, events:[] },
 ];
 function invMonthlyReturn(inv){ return (inv.balance||0) * (inv.rate||0)/100/12; }
+function invRecurringActive(inv){ return !!(inv.recurring && (inv.recurring.amount>0 || inv.recurring.autoSweep)); }
+/* "Leftover" = every other income source's total at that date, minus household spending — used to
+   auto-sweep whatever's left over into one designated investment, instead of a fixed contribution amount. */
+function householdSpendableTotal(date, excludeInvId){
+  let s = 0;
+  properties.forEach(p=> s += propertyCashFlowAtDate(p, date));
+  investments.forEach(inv2=>{ if(inv2.committed===false || inv2.id===excludeInvId) return; s += invMonthlyReturnAtDate(inv2, date); });
+  standaloneLoans.forEach(l=>{ if(l.committed!==false) s -= standaloneLoanPaymentAtDate(l.id, date); });
+  return s;
+}
+function sweepAmountAtDate(inv, date, currentBal){
+  const ownReturn = (currentBal||0)*(inv.rate||0)/100/12;
+  const total = householdSpendableTotal(date, inv.id) + ownReturn;
+  return Math.max(0, total - (state.settings.monthlySpending||0));
+}
 function newInvId(){ return 'inv'+(_nextInvId++); }
 function newInvEventId(){ return 'ie'+(_nextInvEventId++); }
 function findInvestment(id){ return investments.find(i=>i.id===id); }
@@ -337,7 +352,10 @@ function invBalanceAtDate(inv, date){
     (inv.events||[]).forEach(e=>{
       if(mkey(parseD(e.date))===mkey(cursor)) bal += invEventSign(e.type)*e.amount;
     });
-    if(inv.recurring && inv.recurring.amount>0 && cursor>=parseD(inv.recurring.startDate)) bal += (inv.recurring.direction==='debit'?-1:1)*inv.recurring.amount;
+    if(inv.recurring && cursor>=parseD(inv.recurring.startDate)){
+      if(inv.recurring.autoSweep) bal += sweepAmountAtDate(inv, cursor, bal);
+      else if(inv.recurring.amount>0) bal += (inv.recurring.direction==='debit'?-1:1)*inv.recurring.amount;
+    }
     bal = Math.max(0, bal);
     if(cursor<date) bal += bal*(inv.rate||0)/100/12; // compound this month's interest before moving on, unless this IS the target month
     cursor = addM(cursor,1);
@@ -346,7 +364,7 @@ function invBalanceAtDate(inv, date){
 }
 /* Single-pass version of the above, for building an entire month-by-month series efficiently
    (calling invBalanceAtDate per-cell would be O(months^2) — fine at 24 months, not at 600). */
-function invMonthlyReturnSeries(inv, monthsCount){
+function invMonthlyReturnSeries(inv, monthsCount, sweepSeries){
   const series = [];
   let bal = inv.balance||0;
   for(let i=0;i<monthsCount;i++){
@@ -355,7 +373,14 @@ function invMonthlyReturnSeries(inv, monthsCount){
       (inv.events||[]).forEach(e=>{
         if(mkey(parseD(e.date))===mkey(date)) bal += invEventSign(e.type)*e.amount;
       });
-      if(inv.recurring && inv.recurring.amount>0 && date>=parseD(inv.recurring.startDate)) bal += (inv.recurring.direction==='debit'?-1:1)*inv.recurring.amount;
+      if(inv.recurring && date>=parseD(inv.recurring.startDate)){
+        if(inv.recurring.autoSweep){
+          const ownReturn = bal*(inv.rate||0)/100/12;
+          const total = (sweepSeries?sweepSeries[i]:0) + ownReturn;
+          bal += Math.max(0, total - (state.settings.monthlySpending||0));
+        }
+        else if(inv.recurring.amount>0) bal += (inv.recurring.direction==='debit'?-1:1)*inv.recurring.amount;
+      }
       bal = Math.max(0, bal);
     }
     series.push(bal*(inv.rate||0)/100/12);
@@ -375,7 +400,14 @@ function invGrowthSchedule(inv){
     let added = 0;
     if(i>0){
       invCellEvents(inv, mkey(date)+'-01').forEach(e=>{ added += invEventSign(e.type)*e.amount; });
-      if(inv.recurring && inv.recurring.amount>0 && date>=parseD(inv.recurring.startDate)) added += (inv.recurring.direction==='debit'?-1:1)*inv.recurring.amount;
+      if(inv.recurring && date>=parseD(inv.recurring.startDate)){
+        if(inv.recurring.autoSweep){
+          const prevRow = rows[i-1];
+          const preSweepBal = prevRow.balance + prevRow.interest;
+          added += sweepAmountAtDate(inv, date, preSweepBal);
+        }
+        else if(inv.recurring.amount>0) added += (inv.recurring.direction==='debit'?-1:1)*inv.recurring.amount;
+      }
     }
     rows.push({ date, balance, interest, added });
   }
@@ -443,19 +475,30 @@ function remainingProjected(id){ const {rows}=scheduleFor(id); const idx=idxCurr
 
 function propertyOtherBalance(prop){ return (prop.otherLoans||[]).reduce((s,l)=>s+currentRow(l.id).balance,0); }
 function propertyCurrent(prop){
+  if(!prop.loans.length) return {balance:0, interest:0, principal:0, rate:0, ip:0};
   const primary = prop.loans[0];
   const prow = currentRow(primary.id);
   const balance = prow.balance + propertyOtherBalance(prop);
   return {balance, interest:prow.interest, principal:prow.principal, rate:primary.rate, ip: prow.principal>0?prow.interest/prow.principal:0};
 }
-function propertyYearsLeft(prop){ return yearsLeft(prop.loans[0].id); }
+function propertyYearsLeft(prop){ return prop.loans.length ? yearsLeft(prop.loans[0].id) : 0; }
 function propertyOriginal(prop){ return allLoansOf(prop).reduce((s,l)=>s+l.original,0); }
 function propertyProgress(prop){
   const orig = propertyOriginal(prop); const bal = propertyCurrent(prop).balance;
+  if(orig<=0) return 1;
   return Math.max(0, Math.min(1, (orig-bal)/orig));
 }
 function unitRentAtDate(u, date){
-  if((u.vacancies||[]).some(v=> date>=parseD(v.start) && date<=parseD(v.end))) return 0;
+  const inVacancy = (u.vacancies||[]).some(v=>{
+    const start = parseD(v.start), end = parseD(v.end);
+    if(v.recurring){
+      if(date < start) return false;
+      const sm = start.getMonth(), em = end.getMonth(), m = date.getMonth();
+      return sm<=em ? (m>=sm && m<=em) : (m>=sm || m<=em);
+    }
+    return date>=start && date<=end;
+  });
+  if(inVacancy) return 0;
   let rent = u.rent;
   (u.increases||[]).slice().sort((a,b)=>parseD(a.date)-parseD(b.date)).forEach(inc=>{
     const start = parseD(inc.date);
@@ -477,7 +520,7 @@ function propertyCustomCostsMonthly(prop){
 }
 function propertyCosts(prop){
   const primary = prop.loans[0];
-  const row = currentRow(primary.id);
+  const row = primary ? currentRow(primary.id) : {interest:0, principal:0};
   const pmt = row.interest+row.principal;
   const otherPmt = (prop.otherLoans||[]).reduce((s,l)=>{ const r=currentRow(l.id); return s+r.interest+r.principal; },0);
   const gross = propertyRevenue(prop);
@@ -491,7 +534,7 @@ function propertyCosts(prop){
 function propertyCashFlow(prop){ return propertyRevenue(prop) - propertyCosts(prop).total; }
 function propertyCashFlowAtDate(prop, date){
   const primary = prop.loans[0];
-  const prow = scheduleRowAtDate(primary.id, date);
+  const prow = primary ? scheduleRowAtDate(primary.id, date) : null;
   const pmt = prow ? prow.interest+prow.principal : 0;
   const otherPmt = (prop.otherLoans||[]).reduce((s,l)=>{
     const orow = scheduleRowAtDate(l.id, date);
@@ -524,18 +567,18 @@ function incomeTotalAtDate(date){ return incomeSources().reduce((s,src)=>s+incom
 function portfolioTotals(){
   let balance=0, interest=0, principal=0;
   properties.forEach(p=>{ allLoansOf(p).forEach(l=>{ const row=currentRow(l.id); balance+=row.balance; interest+=row.interest; principal+=row.principal; }); });
-  return {balance, interest, principal, ip: interest/principal};
+  return {balance, interest, principal, ip: principal>0?interest/principal:0};
 }
 function portfolioYearsLeft(weighted){
   let wsum=0,bsum=0,list=[];
   properties.forEach(p=>{ const c=propertyCurrent(p); const yl=propertyYearsLeft(p); wsum+=c.balance*yl; bsum+=c.balance; list.push(yl); });
-  if(!weighted) return list.reduce((a,b)=>a+b,0)/list.length;
-  return wsum/bsum;
+  if(!weighted) return list.length ? list.reduce((a,b)=>a+b,0)/list.length : 0;
+  return bsum>0 ? wsum/bsum : 0;
 }
 
 /* ============ FORMATTERS ============ */
 const state = { tab:'income', pushed:null, sheet:null, sheetEdit:false, sort:'balance', sortDir:1,
-  settings:{ showCents:false, weightedYears:true },
+  settings:{ showCents:false, weightedYears:true, monthlySpending:0 },
   planner:{}, analyzerSel:{}, azSections:{},
   cas:{ selectedId:'montana2', customBalance:350000, customRate:5.99, customTermYears:27,
     prepay:50000, grossReturn:4.5, taxRate:24, horizonKey:'5', horizonYearsCustom:5,
@@ -620,6 +663,7 @@ function fmtSigned$(n){ return (n<0?'-':'+')+fmt$(Math.abs(n)); }
 function fmtRatio(n){ return n.toFixed(2)+'x'; }
 function fmtPct(n){ return n.toFixed(2)+'%'; }
 function fmtMonth(d){ return d.toLocaleDateString('en-US',{month:'short',year:'numeric'}); }
+function fmtMonthName(d){ return d.toLocaleDateString('en-US',{month:'short'}); }
 function fmtYears(n){ return n.toFixed(1)+' yrs'; }
 
 /* ============ ICONS ============ */
@@ -732,7 +776,7 @@ function renderPortfolio(){
       <div class="stat-pill"><div class="v" style="color:var(--principal)">${fmt$(tot.principal)}</div><div class="l">Principal / mo</div></div>
       <div class="stat-pill"><div class="v" style="color:var(--accent)">${fmtRatio(tot.ip)}</div><div class="l">Portfolio I/P</div></div>
     </div>
-    <div class="dim" style="font-size:11.5px; margin-top:11px;">5 properties &middot; 7 loans &middot; ${fmtYears(yrs)} ${state.settings.weightedYears?'balance-weighted':'unweighted'} avg left</div>
+    <div class="dim" style="font-size:11.5px; margin-top:11px;">${properties.length} propert${properties.length===1?'y':'ies'} &middot; ${properties.reduce((s,p)=>s+allLoansOf(p).length,0)} loan${properties.reduce((s,p)=>s+allLoansOf(p).length,0)===1?'':'s'} &middot; ${fmtYears(yrs)} ${state.settings.weightedYears?'balance-weighted':'unweighted'} avg left</div>
   </div>
   <div style="text-align:right; margin:10px 0 0; display:flex; flex-direction:column; gap:4px;">
     <span class="link" style="font-size:13px;" onclick="push({type:'allocate'})">Where should the cash go? &rsaquo;</span>
@@ -1031,6 +1075,12 @@ function unitVacancy_delete(propId, idx, vacId){
   u.vacancies = (u.vacancies||[]).filter(x=>x.id!==vacId);
   render();
 }
+function unitVacancy_setRecurring(propId, idx, vacId, recurring){
+  const u = findProperty(propId).units[idx];
+  const v = (u.vacancies||[]).find(x=>x.id===vacId);
+  if(v) v.recurring = recurring;
+  render();
+}
 function unitRow(propId, u, idx, editing){
   const increases = (u.increases||[]).slice().sort((a,b)=>parseD(a.date)-parseD(b.date));
   const vacancies = (u.vacancies||[]).slice().sort((a,b)=>parseD(a.start)-parseD(b.start));
@@ -1038,7 +1088,7 @@ function unitRow(propId, u, idx, editing){
   if(!editing){
     return `<div class="row-line"><span class="l">${label}</span><span class="v">${fmt$(u.rent)}/mo</span></div>
     ${increases.map(inc=>`<div class="dim" style="font-size:11px; margin:-2px 0 4px; padding-left:2px;">+${inc.pct}%${inc.recurring?' every year':''} starting ${fmtMonth(parseD(inc.date))}</div>`).join('')}
-    ${vacancies.map(v=>`<div class="dim" style="font-size:11px; margin:-2px 0 4px; padding-left:2px; color:var(--danger);">Vacant ${fmtMonth(parseD(v.start))} &ndash; ${fmtMonth(parseD(v.end))}</div>`).join('')}`;
+    ${vacancies.map(v=>`<div class="dim" style="font-size:11px; margin:-2px 0 4px; padding-left:2px; color:var(--danger);">Vacant ${v.recurring?`every ${fmtMonthName(parseD(v.start))}&ndash;${fmtMonthName(parseD(v.end))}`:`${fmtMonth(parseD(v.start))} &ndash; ${fmtMonth(parseD(v.end))}`}</div>`).join('')}`;
   }
   return `<div class="row-line"><span class="l">${label}</span><input id="in-unit-${idx}" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-unit-'+idx,u.rent)}" oninput="RAW['in-unit-${idx}']=this.value; rev_set('${propId}',${idx},this.value)"/></div>
   ${increases.map(inc=>`<div class="cost-row" style="margin:4px 0 8px; padding-left:10px;">
@@ -1060,6 +1110,10 @@ function unitRow(propId, u, idx, editing){
       <input type="month" value="${mkey(parseD(v.start))}" oninput="unitVacancy_setStart('${propId}',${idx},'${v.id}',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-mono); font-size:13px; font-weight:600; outline:none; flex:1; min-width:0;"/>
       <span class="faint" style="font-size:11px;">to</span>
       <input type="month" value="${mkey(parseD(v.end))}" oninput="unitVacancy_setEnd('${propId}',${idx},'${v.id}',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-mono); font-size:13px; font-weight:600; outline:none; flex:1; min-width:0;"/>
+    </div>
+    <div class="seg" style="margin-top:6px;">
+      <button class="${v.recurring?'active':''}" onclick="unitVacancy_setRecurring('${propId}',${idx},'${v.id}',true)" style="font-size:10.5px; padding:6px 3px;">Every year</button>
+      <button class="${!v.recurring?'active':''}" onclick="unitVacancy_setRecurring('${propId}',${idx},'${v.id}',false)" style="font-size:10.5px; padding:6px 3px;">One-time</button>
     </div>
     <div style="text-align:right; margin-top:4px;"><span class="link" style="color:var(--danger); font-size:11px;" onclick="unitVacancy_delete('${propId}',${idx},'${v.id}')">Remove</span></div>
   </div>`).join('')}
@@ -1314,9 +1368,29 @@ function renderStandaloneLoanDraft(id){
     <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Shows up as a monthly payment on the Income page, and here on Portfolio under Other loans &mdash; it isn't tied to any property.</div></details>
   </div>`;
 }
+function renderDebtFreePropertyDetail(propId){
+  const prop = findProperty(propId);
+  const cf = propertyCashFlow(prop);
+  return `
+  <div class="header-sticky">
+    <button class="back" onclick="goBack()">&lsaquo; ${backLabel()}</button>
+  </div>
+  <div class="card" style="padding:14px 16px;">
+    <div style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;">
+      <div style="font-size:18px; font-weight:700;">${prop.name}</div>
+      <div class="dim" style="font-size:11.5px; white-space:nowrap;">${prop.type}</div>
+    </div>
+    <div class="big-number" style="margin-top:3px; font-size:27px; color:${cf>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(cf)}/mo</div>
+    <div class="dim" style="font-size:11.5px; margin-top:4px;">Debt-free &mdash; no mortgage on this property</div>
+  </div>
+  ${linkGridRow(prop, cf, '')}
+  <div class="footnote" style="margin-top:18px;">No loan on this property, so there's no amortization or extra-payment planner to show &mdash; just revenue and costs.</div>
+  `;
+}
 function renderLoanDetail(propId){
   const prop = findProperty(propId);
   if(prop.isStandaloneLoan && prop.committed===false) return renderStandaloneLoanDraft(propId);
+  if(!prop.isStandaloneLoan && prop.loans.length===0) return renderDebtFreePropertyDetail(propId);
   const c = propertyCurrent(prop);
   const yrs = propertyYearsLeft(prop);
   const progress = propertyProgress(prop);
@@ -2239,14 +2313,25 @@ function toggleIncomeExpand(){ state.income.expanded = !state.income.expanded; r
 function computeIncomeSeries(months){
   const sources = incomeSources();
   const bySourceId = {};
+  const sweepSources = [];
   sources.forEach(src=>{
     if(src.kind==='investment'){
-      bySourceId[src.id] = invMonthlyReturnSeries(findInvestment(src.id.slice(4)), months.length);
+      const inv = findInvestment(src.id.slice(4));
+      if(inv.recurring && inv.recurring.autoSweep){ sweepSources.push(src); return; }
+      bySourceId[src.id] = invMonthlyReturnSeries(inv, months.length);
+    } else if(src.kind==='loan'){
+      bySourceId[src.id] = months.map(d=>-standaloneLoanPaymentAtDate(src.id.slice(5), d));
     } else {
       const prop = findProperty(src.id.slice(5));
       bySourceId[src.id] = months.map(d=>propertyCashFlowAtDate(prop, d));
     }
   });
+  if(sweepSources.length){
+    const nonSweepTotal = months.map((d,i)=> sources.filter(s=>!sweepSources.includes(s)).reduce((s,src)=>s+bySourceId[src.id][i],0));
+    sweepSources.forEach(src=>{
+      bySourceId[src.id] = invMonthlyReturnSeries(findInvestment(src.id.slice(4)), months.length, nonSweepTotal);
+    });
+  }
   const totals = months.map((d,i)=> sources.reduce((s,src)=>s+bySourceId[src.id][i], 0));
   return { bySourceId, totals };
 }
@@ -2394,6 +2479,17 @@ function inv_setRecurring(id, val){
 function inv_setRecurringDirection(id, dir){ const inv=findInvestment(id); if(inv.recurring) inv.recurring.direction=dir; render(); }
 function inv_setRecurringNote(id, val){ const inv=findInvestment(id); if(inv.recurring) inv.recurring.note=val; render(); }
 function inv_clearRecurring(id){ const inv=findInvestment(id); inv.recurring=null; render(); }
+function inv_setRecurringMode(id, mode){
+  const inv = findInvestment(id);
+  if(mode==='sweep'){
+    if(!inv.recurring) inv.recurring = { amount:0, direction:'credit', note:'', startDate: mkey(addM(TODAY,1))+'-01', autoSweep:true };
+    else inv.recurring.autoSweep = true;
+  } else if(inv.recurring){
+    inv.recurring.autoSweep = false;
+  }
+  render();
+}
+function set_monthlySpending(val){ state.settings.monthlySpending = Math.max(0, numFrom(val)); render(); }
 
 /* ---- Withdraw / Transfer ---- */
 function inv_openWithdraw(id){
@@ -2588,6 +2684,17 @@ function renderInvestmentDetail(id){
     ` : ''}
     ${editing && inv.committed!==false ? `
     <div class="dim" style="font-size:11px; margin-top:12px;">Recurring monthly amount <span class="faint">(optional)</span></div>
+    <div class="seg" style="margin-bottom:8px;">
+      <button class="${!(inv.recurring&&inv.recurring.autoSweep)?'active':''}" onclick="inv_setRecurringMode('${id}','fixed')">Fixed amount</button>
+      <button class="${inv.recurring&&inv.recurring.autoSweep?'active':''}" onclick="inv_setRecurringMode('${id}','sweep')">Auto-sweep leftover</button>
+    </div>
+    ${inv.recurring&&inv.recurring.autoSweep ? `
+    <div class="dim" style="font-size:11px; margin:8px 0 2px;">Monthly household spending</div>
+    <div class="input-row"><span class="suffix">$</span><input id="in-monthly-spending" type="text" inputmode="decimal" value="${rv('in-monthly-spending',state.settings.monthlySpending||'')}" oninput="RAW['in-monthly-spending']=this.value; set_monthlySpending(this.value)"/></div>
+    <div class="dim" style="font-size:10.5px; margin-top:4px;">Whatever's left after spending, across every property and other investment, gets swept in here each month &mdash; recalculated fresh every month, not a fixed number.</div>
+    <div class="input-row" style="margin-top:8px;"><input id="in-inv-recur-note" type="text" value="${inv.recurring.note||''}" placeholder="e.g. Household savings sweep" oninput="inv_setRecurringNote('${id}',this.value)" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:14px;font-weight:600;outline:none;width:100%;"/></div>
+    <div class="dim" style="font-size:10.5px; margin-top:4px;">Starting ${fmtMonth(parseD(inv.recurring.startDate))} &middot; <span class="link" style="font-size:10.5px;" onclick="inv_clearRecurring('${id}')">Remove</span></div>
+    ` : `
     ${inv.recurring&&inv.recurring.amount>0 ? `
     <div class="seg" style="margin-bottom:8px;">
       <button class="${inv.recurring.direction!=='debit'?'active':''}" onclick="inv_setRecurringDirection('${id}','credit')">Contribute (+)</button>
@@ -2599,7 +2706,11 @@ function renderInvestmentDetail(id){
     <div class="input-row" style="margin-top:8px;"><input id="in-inv-recur-note" type="text" value="${inv.recurring.note||''}" placeholder="e.g. Travel fund" oninput="inv_setRecurringNote('${id}',this.value)" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:14px;font-weight:600;outline:none;width:100%;"/></div>
     <div class="dim" style="font-size:10.5px; margin-top:4px;">Starting ${fmtMonth(parseD(inv.recurring.startDate))} &middot; <span class="link" style="font-size:10.5px;" onclick="inv_clearRecurring('${id}')">Remove</span></div>
     ` : ''}
-    ` : (inv.recurring&&inv.recurring.amount>0 ? `<div class="dim" style="font-size:11px; margin-top:10px; color:${inv.recurring.direction==='debit'?'var(--interest)':'var(--principal)'};">${inv.recurring.direction==='debit'?'&minus;':'+'}${fmt$(inv.recurring.amount)}/mo recurring${inv.recurring.note?' &middot; '+inv.recurring.note:''}, starting ${fmtMonth(parseD(inv.recurring.startDate))}</div>` : '')}
+    `}
+    ` : (invRecurringActive(inv) ? (inv.recurring.autoSweep
+        ? `<div class="dim" style="font-size:11px; margin-top:10px; color:var(--principal);">Auto-sweeping leftover after ${fmt$(state.settings.monthlySpending||0)}/mo spending${inv.recurring.note?' &middot; '+inv.recurring.note:''}, starting ${fmtMonth(parseD(inv.recurring.startDate))}</div>`
+        : `<div class="dim" style="font-size:11px; margin-top:10px; color:${inv.recurring.direction==='debit'?'var(--interest)':'var(--principal)'};">${inv.recurring.direction==='debit'?'&minus;':'+'}${fmt$(inv.recurring.amount)}/mo recurring${inv.recurring.note?' &middot; '+inv.recurring.note:''}, starting ${fmtMonth(parseD(inv.recurring.startDate))}</div>`
+      ) : '')}
     <div class="dim" style="font-size:11px; margin-top:10px; display:flex; justify-content:space-between;">
       <span>Balance as of ${inv.balanceDate?fmtMonth(parseD(inv.balanceDate)):'&mdash;'}</span>
       <span>Rate as of ${inv.rateDate?fmtMonth(parseD(inv.rateDate)):'&mdash;'}</span>
@@ -2615,7 +2726,7 @@ function renderInvestmentDetail(id){
   </div>
 
   <div class="section-label" style="margin-top:22px;">Growth Schedule</div>
-  ${doublingRow ? `<div class="dim" style="font-size:12px; margin-bottom:8px;">At the current rate${inv.recurring&&inv.recurring.amount>0?' and recurring contribution':''}, this roughly <b style="color:var(--text);">doubles by ${fmtMonth(doublingRow.date)}</b> (~${((doublingRow.date-TODAY)/(1000*60*60*24*365.25)).toFixed(1)} years from now).</div>` : `<div class="dim" style="font-size:12px; margin-bottom:8px;">Doesn't double within the next ${(INV_SCHEDULE_MONTHS/12)} years at the current rate.</div>`}
+  ${doublingRow ? `<div class="dim" style="font-size:12px; margin-bottom:8px;">At the current rate${invRecurringActive(inv)?' and recurring contribution':''}, this roughly <b style="color:var(--text);">doubles by ${fmtMonth(doublingRow.date)}</b> (~${((doublingRow.date-TODAY)/(1000*60*60*24*365.25)).toFixed(1)} years from now).</div>` : `<div class="dim" style="font-size:12px; margin-bottom:8px;">Doesn't double within the next ${(INV_SCHEDULE_MONTHS/12)} years at the current rate.</div>`}
   <div class="amort-jump" id="invScheduleJump">
     <button id="invjump-beginning" onclick="jumpInvSchedule('beginning')">Beginning</button>
     <button id="invjump-current" class="active" onclick="jumpInvSchedule('current')">Current</button>
@@ -2639,7 +2750,7 @@ function renderInvestmentDetail(id){
     </tbody>
   </table>
   </div>
-  <details class="footnote" style="margin-bottom:6px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Assumes the current rate${inv.recurring&&inv.recurring.amount>0?' and recurring contribution hold':' holds'} steady for ${INV_SCHEDULE_MONTHS/12} years &mdash; a projection, not a guarantee. Balance column is the end-of-month total after that month's interest.</div></details>
+  <details class="footnote" style="margin-bottom:6px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Assumes the current rate${invRecurringActive(inv)?' and recurring contribution hold':' holds'} steady for ${INV_SCHEDULE_MONTHS/12} years &mdash; a projection, not a guarantee. Balance column is the end-of-month total after that month's interest.</div></details>
 
   <div class="section-label" style="margin-top:22px;">History</div>
   ${events.length===0 ? `<div class="dim" style="font-size:12.5px;">No withdrawals, deposits, or transfers yet.</div>` : events.map(e=>`
