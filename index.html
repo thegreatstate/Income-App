@@ -138,6 +138,7 @@ html,body{margin:0; height:100%; overflow:hidden; background:var(--bg);}
 .tabbtn{ flex:1; display:flex; flex-direction:column; align-items:center; gap:3px; color:var(--text-faint); background:none;border:none; font-family:var(--font-ui); font-size:10.5px; font-weight:600; cursor:pointer; padding:4px;}
 .tabbtn.active{ color:var(--accent);}
 .tabbtn svg{width:22px;height:22px;}
+.iconbtn svg{width:18px;height:18px;}
 .sheet-layer{ position:absolute; inset:0; z-index:30; pointer-events:none;}
 .overlay{ position:absolute; inset:0; background:rgba(0,0,0,.5); display:flex; align-items:flex-end; z-index:20; animation:fadein .15s ease; pointer-events:auto;}
 @keyframes fadein{from{opacity:0}to{opacity:1}}
@@ -314,9 +315,22 @@ const standaloneLoans = [];
 let _nextSpendingOverrideId = 1;
 function newSpendingOverrideId(){ return 'sov'+(_nextSpendingOverrideId++); }
 const householdSpendingOverrides = [];
-function effectiveSpendingAtDate(date){
+function effectiveSpendingAtDate(date, investmentInterest){
   const hit = householdSpendingOverrides.find(o=> date>=parseD(o.start) && date<=parseD(o.end));
-  return hit ? hit.amount : (state.settings.monthlySpending||0);
+  if(hit) return hit.amount; // a scheduled change replaces the whole draw for that window — no % layered on top
+  const baseline = state.settings.monthlySpending||0;
+  const pct = state.settings.spendingPctOfInterest||0;
+  const interest = investmentInterest!==undefined ? investmentInterest : totalInvestmentInterestAtDate(date);
+  return baseline + (pct/100)*interest;
+}
+function totalInvestmentInterestAtDate(date, excludeId, ownReturnOverride){
+  let s = 0;
+  investments.forEach(inv2=>{
+    if(inv2.committed===false) return;
+    if(inv2.id===excludeId){ s += (ownReturnOverride||0); return; }
+    s += invMonthlyReturnAtDate(inv2, date);
+  });
+  return s;
 }
 function findStandaloneLoan(id){ return standaloneLoans.find(l=>l.id===id); }
 
@@ -328,20 +342,33 @@ const investments = [
   { id:'inv-sample-brk', name:'Brokerage (sample)', isSample:true, balance:25000, rate:7.0, rateDate:null, balanceDate:null, events:[] },
 ];
 function invMonthlyReturn(inv){ return (inv.balance||0) * (inv.rate||0)/100/12; }
-function invRecurringActive(inv){ return !!(inv.recurring && (inv.recurring.amount>0 || inv.recurring.autoSweep)); }
-/* "Leftover" = every other income source's total at that date, minus household spending — used to
-   auto-sweep whatever's left over into one designated investment, instead of a fixed contribution amount. */
-function householdSpendableTotal(date, excludeInvId){
-  let s = 0;
-  properties.forEach(p=> s += propertyCashFlowAtDate(p, date));
-  investments.forEach(inv2=>{ if(inv2.committed===false || inv2.id===excludeInvId) return; s += invMonthlyReturnAtDate(inv2, date); });
-  standaloneLoans.forEach(l=>{ if(l.committed!==false) s -= standaloneLoanPaymentAtDate(l.id, date); });
-  return s;
+function invRecurringActive(inv){ return !!(inv.recurring && (inv.recurring.amount>0 || inv.recurring.growthShare)); }
+/* Growth (income minus draw) can be split across several investments at once — each one either
+   a fixed $ amount per month, or a % of whatever's left after the fixed ones are covered. */
+function growthShareTargets(){
+  return investments.filter(i=>i.committed!==false && i.recurring && i.recurring.growthShare);
 }
-function sweepAmountAtDate(inv, date, currentBal){
-  const ownReturn = (currentBal||0)*(inv.rate||0)/100/12;
-  const total = householdSpendableTotal(date, inv.id) + ownReturn;
-  return Math.max(0, total - effectiveSpendingAtDate(date));
+/* Growth-share investments' balances all depend on each other's same-month interest, so any
+   single-date lookup for one of them has to be computed jointly with the others (see
+   computeGrowthShareSeries below) rather than each calling into the other's balance function —
+   that mutual recursion has no base case and blows the call stack the moment 2+ investments
+   are both set to a growth share. */
+function monthIndexFromToday(date){
+  return (date.getFullYear()-TODAY.getFullYear())*12 + (date.getMonth()-TODAY.getMonth());
+}
+function growthShareNonRecursiveInputs(monthsCount){
+  const nonGrowthInvs = investments.filter(i=>i.committed!==false && !(i.recurring&&i.recurring.growthShare));
+  const propLoanSeries = [];
+  const nonGrowthInvInterestSeries = [];
+  for(let i=0;i<monthsCount;i++){
+    const date = addM(TODAY, i);
+    let pl = 0;
+    properties.forEach(p=> pl += propertyCashFlowAtDate(p, date));
+    standaloneLoans.forEach(l=>{ if(l.committed!==false) pl -= standaloneLoanPaymentAtDate(l.id, date); });
+    propLoanSeries.push(pl);
+    nonGrowthInvInterestSeries.push(nonGrowthInvs.reduce((s,inv2)=> s+invMonthlyReturnAtDate(inv2,date), 0));
+  }
+  return { propLoanSeries, nonGrowthInvInterestSeries };
 }
 function newInvId(){ return 'inv'+(_nextInvId++); }
 function newInvEventId(){ return 'ie'+(_nextInvEventId++); }
@@ -354,6 +381,12 @@ function invEventSign(type){ return (type==='deposit'||type==='transfer_in') ? 1
 function invBalanceAtDate(inv, date){
   let bal = inv.balance||0;
   if(date<=TODAY) return bal;
+  if(inv.recurring && inv.recurring.growthShare){
+    const i = monthIndexFromToday(date);
+    const {propLoanSeries, nonGrowthInvInterestSeries} = growthShareNonRecursiveInputs(i+1);
+    const series = computeGrowthShareSeries(i+1, propLoanSeries, nonGrowthInvInterestSeries);
+    return Math.max(0, series.balance[inv.id][i]);
+  }
   // start the walk at TODAY+1 — anything dated TODAY or earlier already mutated inv.balance directly at entry time,
   // so re-applying it here would double-count it.
   let cursor = addM(TODAY, 1);
@@ -361,9 +394,8 @@ function invBalanceAtDate(inv, date){
     (inv.events||[]).forEach(e=>{
       if(mkey(parseD(e.date))===mkey(cursor)) bal += invEventSign(e.type)*e.amount;
     });
-    if(inv.recurring && cursor>=parseD(inv.recurring.startDate)){
-      if(inv.recurring.autoSweep) bal += sweepAmountAtDate(inv, cursor, bal);
-      else if(inv.recurring.amount>0) bal += (inv.recurring.direction==='debit'?-1:1)*inv.recurring.amount;
+    if(inv.recurring && cursor>=parseD(inv.recurring.startDate) && inv.recurring.amount>0){
+      bal += (inv.recurring.direction==='debit'?-1:1)*inv.recurring.amount;
     }
     bal = Math.max(0, bal);
     if(cursor<date) bal += bal*(inv.rate||0)/100/12; // compound this month's interest before moving on, unless this IS the target month
@@ -372,8 +404,10 @@ function invBalanceAtDate(inv, date){
   return Math.max(0, bal);
 }
 /* Single-pass version of the above, for building an entire month-by-month series efficiently
-   (calling invBalanceAtDate per-cell would be O(months^2) — fine at 24 months, not at 600). */
-function invMonthlyReturnSeries(inv, monthsCount, sweepSeries){
+   (calling invBalanceAtDate per-cell would be O(months^2) — fine at 24 months, not at 600).
+   Only handles fixed-amount recurring — growth-share investments are walked jointly instead,
+   via computeGrowthShareSeries, since their monthly amount depends on each other. */
+function invMonthlyReturnSeries(inv, monthsCount){
   const series = [];
   let bal = inv.balance||0;
   for(let i=0;i<monthsCount;i++){
@@ -382,13 +416,8 @@ function invMonthlyReturnSeries(inv, monthsCount, sweepSeries){
       (inv.events||[]).forEach(e=>{
         if(mkey(parseD(e.date))===mkey(date)) bal += invEventSign(e.type)*e.amount;
       });
-      if(inv.recurring && date>=parseD(inv.recurring.startDate)){
-        if(inv.recurring.autoSweep){
-          const ownReturn = bal*(inv.rate||0)/100/12;
-          const total = (sweepSeries?sweepSeries[i]:0) + ownReturn;
-          bal += Math.max(0, total - effectiveSpendingAtDate(date));
-        }
-        else if(inv.recurring.amount>0) bal += (inv.recurring.direction==='debit'?-1:1)*inv.recurring.amount;
+      if(inv.recurring && !inv.recurring.growthShare && inv.recurring.amount>0 && date>=parseD(inv.recurring.startDate)){
+        bal += (inv.recurring.direction==='debit'?-1:1)*inv.recurring.amount;
       }
       bal = Math.max(0, bal);
     }
@@ -397,34 +426,96 @@ function invMonthlyReturnSeries(inv, monthsCount, sweepSeries){
   }
   return series;
 }
+/* Walks every growth-share investment together, month by month, so each month's pool split
+   is computed consistently across all of them at once (their allocations depend on each
+   other's current balance/interest, which is only known within the same joint step). */
+function computeGrowthShareSeries(monthsCount, propLoanSeries, nonGrowthInvInterestSeries){
+  const targets = growthShareTargets();
+  const interest = {}, balance = {}, added = {};
+  if(!targets.length) return { interest, balance, added };
+  const bals = {}; targets.forEach(t=> bals[t.id] = t.balance||0);
+  targets.forEach(t=>{ interest[t.id]=new Array(monthsCount); balance[t.id]=new Array(monthsCount); added[t.id]=new Array(monthsCount); });
+  for(let i=0;i<monthsCount;i++){
+    const date = addM(TODAY, i);
+    const addedThisMonth = {};
+    if(i>0){
+      targets.forEach(t=>{
+        addedThisMonth[t.id] = 0;
+        (t.events||[]).forEach(e=>{ if(mkey(parseD(e.date))===mkey(date)){ const delta = invEventSign(e.type)*e.amount; bals[t.id] += delta; addedThisMonth[t.id] += delta; } });
+      });
+      const targetsInterest = targets.reduce((s,t)=> s+bals[t.id]*(t.rate||0)/100/12, 0);
+      const totalInterest = (nonGrowthInvInterestSeries[i]||0) + targetsInterest;
+      const spending = effectiveSpendingAtDate(date, totalInterest);
+      const pool = Math.max(0, (propLoanSeries[i]||0) + totalInterest - spending);
+      const fixedTargets = targets.filter(t=> t.recurring.startDate<=mkey(date)+'-01' && t.recurring.growthShare.mode==='fixed');
+      const totalFixedAsk = fixedTargets.reduce((s,t)=>s+t.recurring.growthShare.value,0);
+      const remainder = Math.max(0, pool-Math.min(totalFixedAsk,pool));
+      targets.forEach(t=>{
+        if(t.recurring.startDate>mkey(date)+'-01') return; // not started yet
+        let alloc = 0;
+        if(t.recurring.growthShare.mode==='fixed'){
+          alloc = totalFixedAsk<=pool ? t.recurring.growthShare.value : (totalFixedAsk>0 ? pool*(t.recurring.growthShare.value/totalFixedAsk) : 0);
+        } else {
+          alloc = remainder*(t.recurring.growthShare.value/100);
+        }
+        addedThisMonth[t.id] += alloc;
+        bals[t.id] = Math.max(0, bals[t.id]+alloc);
+      });
+    }
+    targets.forEach(t=>{
+      added[t.id][i] = addedThisMonth[t.id]||0;
+      balance[t.id][i] = bals[t.id];
+      const monthInterest = bals[t.id]*(t.rate||0)/100/12;
+      interest[t.id][i] = monthInterest;
+      bals[t.id] += monthInterest;
+    });
+  }
+  return { interest, balance, added };
+}
 function invMonthlyReturnAtDate(inv, date){ return invBalanceAtDate(inv, date) * (inv.rate||0)/100/12; }
 function invCellEvents(inv, dateStr){ return (inv.events||[]).filter(e=>e.date===dateStr); }
 const INV_SCHEDULE_MONTHS = 240; // 20 years — long enough to see an account roughly double at typical rates
+/* Single-pass build — walks forward once instead of re-computing invBalanceAtDate per row
+   (that was O(n^2): 240 rows each re-walking from TODAY). This is what made typing in the
+   Rate/Balance fields feel laggy, since the full 240-row schedule recomputes on every keystroke. */
 function invGrowthSchedule(inv){
+  if(inv.recurring && inv.recurring.growthShare){
+    const {propLoanSeries, nonGrowthInvInterestSeries} = growthShareNonRecursiveInputs(INV_SCHEDULE_MONTHS);
+    const series = computeGrowthShareSeries(INV_SCHEDULE_MONTHS, propLoanSeries, nonGrowthInvInterestSeries);
+    const rows = [];
+    for(let i=0;i<INV_SCHEDULE_MONTHS;i++){
+      rows.push({ date: addM(TODAY, i), balance: series.balance[inv.id][i], interest: series.interest[inv.id][i], added: series.added[inv.id][i] });
+    }
+    return rows;
+  }
   const rows = [];
+  let bal = inv.balance||0;
   for(let i=0;i<INV_SCHEDULE_MONTHS;i++){
     const date = addM(TODAY, i);
-    const balance = invBalanceAtDate(inv, date); // this month's starting point (after this month's own events/recurring, before this month's interest)
-    const interest = balance*(inv.rate||0)/100/12;
     let added = 0;
     if(i>0){
-      invCellEvents(inv, mkey(date)+'-01').forEach(e=>{ added += invEventSign(e.type)*e.amount; });
-      if(inv.recurring && date>=parseD(inv.recurring.startDate)){
-        if(inv.recurring.autoSweep){
-          const prevRow = rows[i-1];
-          const preSweepBal = prevRow.balance + prevRow.interest;
-          added += sweepAmountAtDate(inv, date, preSweepBal);
-        }
-        else if(inv.recurring.amount>0) added += (inv.recurring.direction==='debit'?-1:1)*inv.recurring.amount;
+      (inv.events||[]).forEach(e=>{
+        if(mkey(parseD(e.date))===mkey(date)) added += invEventSign(e.type)*e.amount;
+      });
+      if(inv.recurring && date>=parseD(inv.recurring.startDate) && inv.recurring.amount>0){
+        added += (inv.recurring.direction==='debit'?-1:1)*inv.recurring.amount;
       }
+      bal = Math.max(0, bal + added);
     }
-    rows.push({ date, balance, interest, added });
+    const interest = bal*(inv.rate||0)/100/12;
+    rows.push({ date, balance: bal, interest, added });
+    bal += interest;
   }
   return rows;
 }
 function invDoublingRow(rows, startBalance){
   if(startBalance<=0) return null;
   return rows.find(r=>(r.balance+r.interest)>=startBalance*2) || null;
+}
+const INV_MULTIPLIERS = [2,4,8,16,32];
+function invMultiplierRow(rows, startBalance, multiplier){
+  if(startBalance<=0) return null;
+  return rows.find(r=>(r.balance+r.interest)>=startBalance*multiplier) || null;
 }
 
 /* ============ AMORTIZATION ENGINE ============ */
@@ -636,6 +727,11 @@ function exportData(){
   document.body.removeChild(a);
   setTimeout(()=>URL.revokeObjectURL(url), 1000);
   render();
+}
+function resetLocalData(){
+  if(!confirm("This clears everything saved on this device and reloads the app's built-in data. Any changes you've made here will be lost — export first if you want to keep them. Continue?")) return;
+  try{ localStorage.removeItem(FINAPP_STORAGE_KEY); }catch(e){}
+  location.reload();
 }
 function triggerImport(){ const el=document.getElementById('importFileInput'); if(el) el.click(); }
 function handleImportFile(input){
@@ -1216,12 +1312,15 @@ function renderSheet(){
   }
   if(s.type==='incomeAdjust'){
     const baseline = state.settings.monthlySpending||0;
+    const pctOfInterest = state.settings.spendingPctOfInterest||0;
     const overrides = householdSpendingOverrides.slice().sort((a,b)=>parseD(a.start)-parseD(b.start));
     return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
       <div class="sheet-handle"></div>
       ${sheetHead('Income', 'What you draw month to month', false)}
       <div class="dim" style="font-size:12px; margin-bottom:2px;">Normal monthly draw</div>
       <div class="input-row"><span class="suffix">$</span><input id="in-monthly-spending-sheet" type="text" inputmode="decimal" value="${rv('in-monthly-spending-sheet',baseline||'')}" oninput="RAW['in-monthly-spending-sheet']=this.value; set_monthlySpending(this.value)"/></div>
+      <div class="dim" style="font-size:12px; margin:12px 0 2px;">Plus this % of that month's investment interest <span class="faint">(optional &mdash; extra fun money that grows with your balance)</span></div>
+      <div class="input-row"><input id="in-spending-pct" type="text" inputmode="decimal" value="${rv('in-spending-pct',pctOfInterest||'')}" oninput="RAW['in-spending-pct']=this.value; set_spendingPctOfInterest(this.value)"/><span class="suffix">%</span></div>
       <div class="dim" style="font-size:11px; text-transform:uppercase; letter-spacing:.06em; font-weight:700; margin-top:16px; margin-bottom:2px;">Scheduled changes</div>
       ${overrides.map(o=>`<div class="cost-row" style="margin:6px 0;">
         <div class="top" style="gap:8px;">
@@ -1241,18 +1340,31 @@ function renderSheet(){
     </div></div>`;
   }
   if(s.type==='growthTarget'){
-    const sweepTarget = currentSweepTarget();
     const committedInvestments = investments.filter(i=>i.committed!==false);
     return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
       <div class="sheet-handle"></div>
       ${sheetHead('Growth', 'Where the leftover goes', false)}
       ${committedInvestments.length===0 ? `<div class="dim" style="font-size:13px;">Add an investment first to pick a destination.</div>` : `
-      <div class="sort-row" style="margin-top:0;">
-        ${committedInvestments.map(inv=>`<div class="chip ${sweepTarget&&sweepTarget.id===inv.id?'active':''}" onclick="setSweepTarget('${inv.id}')">${inv.name}</div>`).join('')}
-        ${sweepTarget?`<div class="chip" onclick="clearSweepTarget()">None</div>`:''}
-      </div>
+      <div class="dim" style="font-size:12px; margin-bottom:8px;">Tap to include an investment, split fixed $ or % of what's left after any fixed amounts are covered.</div>
+      ${committedInvestments.map(inv=>{
+        const gs = inv.recurring && inv.recurring.growthShare;
+        return `<div class="cost-row" style="margin-bottom:8px;">
+          <div class="top"><span class="l" style="cursor:pointer;" onclick="toggleGrowthTarget('${inv.id}')">${gs?'&#9679;':'&#9675;'} ${inv.name}</span></div>
+          ${gs ? `
+          <div class="seg" style="margin-top:6px;">
+            <button class="${gs.mode==='pct'?'active':''}" onclick="inv_setGrowthShareMode('${inv.id}','pct')">%</button>
+            <button class="${gs.mode==='fixed'?'active':''}" onclick="inv_setGrowthShareMode('${inv.id}','fixed')">Fixed $</button>
+          </div>
+          <div class="top" style="gap:8px; margin-top:6px;">
+            ${gs.mode==='fixed'?'<span class="suffix">$</span>':''}
+            <input type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-gs-'+inv.id, gs.value||'')}" oninput="RAW['in-gs-${inv.id}']=this.value; inv_setGrowthShareValue('${inv.id}',this.value)"/>
+            ${gs.mode==='pct'?'<span class="suffix">%</span>':''}
+          </div>
+          ` : ''}
+        </div>`;
+      }).join('')}
       `}
-      <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Growth (income minus your draw) is swept into whichever investment is picked here, recalculated fresh every month.</div></details>
+      <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Growth (income minus your draw) is split across whichever investments are picked here, recalculated fresh every month. Fixed $ amounts are reserved first; percentages split whatever's left.</div></details>
     </div></div>`;
   }
   if(s.type==='analyzerDetail'){
@@ -1496,13 +1608,32 @@ function jumpAmort(target){
   if(btn) btn.classList.add('active');
 }
 function jumpInvSchedule(target){
-  const ids={beginning:'invrow-current', current:'invrow-current', doubled:'invrow-doubled', end:'invrow-last'};
+  const ids={beginning:'invrow-current', current:'invrow-current', end:'invrow-last'};
   const win = document.getElementById('invScheduleWindow');
   const el = document.getElementById(ids[target]);
   if(win && el){ win.scrollTop = el.offsetTop - 34; }
   document.querySelectorAll('#invScheduleJump button').forEach(b=>b.classList.remove('active'));
   const btn = document.getElementById('invjump-'+target);
   if(btn) btn.classList.add('active');
+  if(target==='current') _invMultCursor = -1; // back to the start of the multiplier cycle
+}
+/* One button that advances through the reached multipliers (2x, 4x, 8x...) on each tap,
+   rather than a separate button per milestone — repeat-tapping it steps forward and wraps. */
+let _invMultCursor = -1;
+function jumpInvMultiplier(id){
+  const inv = findInvestment(id);
+  if(!inv) return;
+  const schedule = invGrowthSchedule(inv);
+  const mults = INV_MULTIPLIERS.map(m=>({mult:m, row:invMultiplierRow(schedule, inv.balance, m)})).filter(x=>x.row);
+  if(!mults.length) return;
+  _invMultCursor = (_invMultCursor+1) % mults.length;
+  const target = mults[_invMultCursor];
+  const win = document.getElementById('invScheduleWindow');
+  const el = document.getElementById('invrow-mult'+target.mult);
+  if(win && el){ win.scrollTop = el.offsetTop - 34; }
+  document.querySelectorAll('#invScheduleJump button').forEach(b=>b.classList.remove('active'));
+  const btn = document.getElementById('invjump-mult');
+  if(btn){ btn.classList.add('active'); btn.textContent = target.mult+'×'; }
 }
 
 function renderPlannerSheet(propId){
@@ -2346,12 +2477,11 @@ function toggleIncomeExpand(){ state.income.expanded = !state.income.expanded; r
 function computeIncomeSeries(months){
   const sources = incomeSources();
   const bySourceId = {};
-  const sweepSources = [];
+  const growthSourceIds = new Set(growthShareTargets().map(t=>'inv:'+t.id));
   sources.forEach(src=>{
     if(src.kind==='investment'){
-      const inv = findInvestment(src.id.slice(4));
-      if(inv.recurring && inv.recurring.autoSweep){ sweepSources.push(src); return; }
-      bySourceId[src.id] = invMonthlyReturnSeries(inv, months.length);
+      if(growthSourceIds.has(src.id)) return; // filled in below, walked jointly
+      bySourceId[src.id] = invMonthlyReturnSeries(findInvestment(src.id.slice(4)), months.length);
     } else if(src.kind==='loan'){
       bySourceId[src.id] = months.map(d=>-standaloneLoanPaymentAtDate(src.id.slice(5), d));
     } else {
@@ -2359,10 +2489,12 @@ function computeIncomeSeries(months){
       bySourceId[src.id] = months.map(d=>propertyCashFlowAtDate(prop, d));
     }
   });
-  if(sweepSources.length){
-    const nonSweepTotal = months.map((d,i)=> sources.filter(s=>!sweepSources.includes(s)).reduce((s,src)=>s+bySourceId[src.id][i],0));
-    sweepSources.forEach(src=>{
-      bySourceId[src.id] = invMonthlyReturnSeries(findInvestment(src.id.slice(4)), months.length, nonSweepTotal);
+  if(growthSourceIds.size){
+    const propLoanSeries = months.map((d,i)=> sources.filter(s=>s.kind!=='investment').reduce((s,src)=>s+bySourceId[src.id][i],0));
+    const nonGrowthInvInterestSeries = months.map((d,i)=> sources.filter(s=>s.kind==='investment' && !growthSourceIds.has(s.id)).reduce((s,src)=>s+bySourceId[src.id][i],0));
+    const growthResult = computeGrowthShareSeries(months.length, propLoanSeries, nonGrowthInvInterestSeries);
+    growthSourceIds.forEach(sid=>{
+      bySourceId[sid] = growthResult.interest[sid.slice(4)];
     });
   }
   const totals = months.map((d,i)=> sources.reduce((s,src)=>s+bySourceId[src.id][i], 0));
@@ -2389,7 +2521,10 @@ function renderIncomeTimeline(cols, months, series){
       <th>Total</th>
       ${cols.map(c=>{
         const label = (c.kind==='investment'?'~ ':'')+(c.name.length>13?c.name.slice(0,12)+'&hellip;':c.name);
-        return c.kind==='investment' ? `<th style="cursor:pointer; text-decoration:underline; text-decoration-style:dotted;" onclick="push({type:'investment', id:'${c.id.slice(4)}'})">${label}</th>` : `<th>${label}</th>`;
+        if(c.kind==='investment') return `<th style="cursor:pointer; text-decoration:underline; text-decoration-style:dotted;" onclick="push({type:'investment', id:'${c.id.slice(4)}'})">${label}</th>`;
+        if(c.kind==='property') return `<th style="cursor:pointer; text-decoration:underline; text-decoration-style:dotted;" onclick="push({type:'loan', id:'${c.id.slice(5)}'})">${label}</th>`;
+        if(c.kind==='loan') return `<th style="cursor:pointer; text-decoration:underline; text-decoration-style:dotted;" onclick="push({type:'loan', id:'${c.id.slice(5)}'})">${label}</th>`;
+        return `<th>${label}</th>`;
       }).join('')}
     </tr></thead>
     <tbody>
@@ -2534,15 +2669,26 @@ function inv_setRecurringNote(id, val){ const inv=findInvestment(id); if(inv.rec
 function inv_clearRecurring(id){ const inv=findInvestment(id); inv.recurring=null; render(); }
 function inv_setRecurringMode(id, mode){
   const inv = findInvestment(id);
-  if(mode==='sweep'){
-    if(!inv.recurring) inv.recurring = { amount:0, direction:'credit', note:'', startDate: mkey(addM(TODAY,1))+'-01', autoSweep:true };
-    else inv.recurring.autoSweep = true;
+  if(mode==='growth'){
+    if(!inv.recurring) inv.recurring = { amount:0, direction:'credit', note:'', startDate: mkey(addM(TODAY,1))+'-01', growthShare:{mode:'pct', value:100} };
+    else if(!inv.recurring.growthShare) inv.recurring.growthShare = {mode:'pct', value:100};
   } else if(inv.recurring){
-    inv.recurring.autoSweep = false;
+    inv.recurring.growthShare = null;
   }
   render();
 }
+function inv_setGrowthShareMode(id, mode){
+  const inv = findInvestment(id);
+  if(inv.recurring && inv.recurring.growthShare) inv.recurring.growthShare.mode = mode;
+  render();
+}
+function inv_setGrowthShareValue(id, val){
+  const inv = findInvestment(id);
+  if(inv.recurring && inv.recurring.growthShare) inv.recurring.growthShare.value = Math.max(0, numFrom(val));
+  render();
+}
 function set_monthlySpending(val){ state.settings.monthlySpending = Math.max(0, numFrom(val)); render(); }
+function set_spendingPctOfInterest(val){ state.settings.spendingPctOfInterest = Math.max(0, Math.min(100, numFrom(val))); render(); }
 function spendingOverride_add(){
   householdSpendingOverrides.push({ id:newSpendingOverrideId(), start: mkey(addM(TODAY,1))+'-01', end: mkey(addM(TODAY,3))+'-01', amount: state.settings.monthlySpending||0, note:'' });
   render();
@@ -2553,19 +2699,16 @@ function spendingOverride_setAmount(id, val){ const o=householdSpendingOverrides
 function spendingOverride_setNote(id, val){ const o=householdSpendingOverrides.find(x=>x.id===id); if(o) o.note=val; render(); }
 function spendingOverride_delete(id){ const idx=householdSpendingOverrides.findIndex(x=>x.id===id); if(idx>=0) householdSpendingOverrides.splice(idx,1); render(); }
 function togglePropertiesExpanded(){ state.income.propertiesExpanded = !state.income.propertiesExpanded; render(); }
-function currentSweepTarget(){ return investments.find(inv=>inv.committed!==false && inv.recurring && inv.recurring.autoSweep); }
-function setSweepTarget(investmentId){
-  investments.forEach(inv=>{
-    if(inv.id===investmentId){
-      if(!inv.recurring) inv.recurring = { amount:0, direction:'credit', note:'Growth sweep', startDate: mkey(addM(TODAY,1))+'-01', autoSweep:true };
-      else inv.recurring.autoSweep = true;
-    } else if(inv.recurring && inv.recurring.autoSweep){
-      inv.recurring.autoSweep = false;
-    }
-  });
+function toggleGrowthTarget(investmentId){
+  const inv = findInvestment(investmentId);
+  if(inv.recurring && inv.recurring.growthShare){
+    inv.recurring.growthShare = null;
+  } else {
+    if(!inv.recurring) inv.recurring = { amount:0, direction:'credit', note:'Growth split', startDate: mkey(addM(TODAY,1))+'-01', growthShare:{mode:'pct', value:100} };
+    else inv.recurring.growthShare = {mode:'pct', value:100};
+  }
   render();
 }
-function clearSweepTarget(){ investments.forEach(inv=>{ if(inv.recurring) inv.recurring.autoSweep=false; }); render(); }
 function toggleInvestmentsExpanded(){ state.income.investmentsExpanded = !state.income.investmentsExpanded; render(); }
 
 /* ---- Withdraw / Transfer ---- */
@@ -2735,6 +2878,7 @@ function renderInvestmentDetail(id){
   const canCommit = inv.name && inv.name.trim() && inv.balance>0;
   const schedule = inv.committed!==false ? invGrowthSchedule(inv) : [];
   const doublingRow = schedule.length ? invDoublingRow(schedule, inv.balance) : null;
+  const multiplierRows = schedule.length ? INV_MULTIPLIERS.map(m=>({mult:m, row:invMultiplierRow(schedule, inv.balance, m)})).filter(x=>x.row) : [];
   return `
   <div class="header-sticky">
     <button class="back" onclick="${inv.committed===false?`inv_closeUncommitted('${id}')`:'goBack()'}">&lsaquo; ${backLabel()}</button>
@@ -2762,13 +2906,16 @@ function renderInvestmentDetail(id){
     ${editing && inv.committed!==false ? `
     <div class="dim" style="font-size:11px; margin-top:12px;">Recurring monthly amount <span class="faint">(optional)</span></div>
     <div class="seg" style="margin-bottom:8px;">
-      <button class="${!(inv.recurring&&inv.recurring.autoSweep)?'active':''}" onclick="inv_setRecurringMode('${id}','fixed')">Fixed amount</button>
-      <button class="${inv.recurring&&inv.recurring.autoSweep?'active':''}" onclick="inv_setRecurringMode('${id}','sweep')">Auto-sweep leftover</button>
+      <button class="${!(inv.recurring&&inv.recurring.growthShare)?'active':''}" onclick="inv_setRecurringMode('${id}','fixed')">Fixed amount</button>
+      <button class="${inv.recurring&&inv.recurring.growthShare?'active':''}" onclick="inv_setRecurringMode('${id}','growth')">Growth share</button>
     </div>
-    ${inv.recurring&&inv.recurring.autoSweep ? `
-    <div class="dim" style="font-size:11px; margin:8px 0 2px;">Monthly household spending</div>
-    <div class="input-row"><span class="suffix">$</span><input id="in-monthly-spending" type="text" inputmode="decimal" value="${rv('in-monthly-spending',state.settings.monthlySpending||'')}" oninput="RAW['in-monthly-spending']=this.value; set_monthlySpending(this.value)"/></div>
-    <div class="dim" style="font-size:10.5px; margin-top:4px;">Whatever's left after spending, across every property and other investment, gets swept in here each month &mdash; recalculated fresh every month, not a fixed number.</div>
+    ${inv.recurring&&inv.recurring.growthShare ? `
+    <div class="seg" style="margin-bottom:8px;">
+      <button class="${inv.recurring.growthShare.mode==='pct'?'active':''}" onclick="inv_setGrowthShareMode('${id}','pct')">%</button>
+      <button class="${inv.recurring.growthShare.mode==='fixed'?'active':''}" onclick="inv_setGrowthShareMode('${id}','fixed')">Fixed $</button>
+    </div>
+    <div class="input-row">${inv.recurring.growthShare.mode==='fixed'?'<span class="suffix">$</span>':''}<input id="in-gs-value" type="text" inputmode="decimal" value="${rv('in-gs-value',inv.recurring.growthShare.value||'')}" oninput="RAW['in-gs-value']=this.value; inv_setGrowthShareValue('${id}',this.value)"/>${inv.recurring.growthShare.mode==='pct'?'<span class="suffix">%</span>':''}</div>
+    <div class="dim" style="font-size:10.5px; margin-top:4px;">Whatever's left after your draw, split across every investment set to a growth share &mdash; recalculated fresh every month, not a fixed number.</div>
     <div class="input-row" style="margin-top:8px;"><input id="in-inv-recur-note" type="text" value="${inv.recurring.note||''}" placeholder="e.g. Household savings sweep" oninput="inv_setRecurringNote('${id}',this.value)" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:14px;font-weight:600;outline:none;width:100%;"/></div>
     <div class="dim" style="font-size:10.5px; margin-top:4px;">Starting ${fmtMonth(parseD(inv.recurring.startDate))} &middot; <span class="link" style="font-size:10.5px;" onclick="inv_clearRecurring('${id}')">Remove</span></div>
     ` : `
@@ -2784,8 +2931,8 @@ function renderInvestmentDetail(id){
     <div class="dim" style="font-size:10.5px; margin-top:4px;">Starting ${fmtMonth(parseD(inv.recurring.startDate))} &middot; <span class="link" style="font-size:10.5px;" onclick="inv_clearRecurring('${id}')">Remove</span></div>
     ` : ''}
     `}
-    ` : (invRecurringActive(inv) ? (inv.recurring.autoSweep
-        ? `<div class="dim" style="font-size:11px; margin-top:10px; color:var(--principal);">Auto-sweeping leftover after ${fmt$(state.settings.monthlySpending||0)}/mo spending${inv.recurring.note?' &middot; '+inv.recurring.note:''}, starting ${fmtMonth(parseD(inv.recurring.startDate))}</div>`
+    ` : (invRecurringActive(inv) ? (inv.recurring.growthShare
+        ? `<div class="dim" style="font-size:11px; margin-top:10px; color:var(--principal);">Growth share: ${inv.recurring.growthShare.mode==='pct'?inv.recurring.growthShare.value+'%':fmt$(inv.recurring.growthShare.value)}${inv.recurring.note?' &middot; '+inv.recurring.note:''}, starting ${fmtMonth(parseD(inv.recurring.startDate))}</div>`
         : `<div class="dim" style="font-size:11px; margin-top:10px; color:${inv.recurring.direction==='debit'?'var(--interest)':'var(--principal)'};">${inv.recurring.direction==='debit'?'&minus;':'+'}${fmt$(inv.recurring.amount)}/mo recurring${inv.recurring.note?' &middot; '+inv.recurring.note:''}, starting ${fmtMonth(parseD(inv.recurring.startDate))}</div>`
       ) : '')}
     <div class="dim" style="font-size:11px; margin-top:10px; display:flex; justify-content:space-between;">
@@ -2807,7 +2954,7 @@ function renderInvestmentDetail(id){
   <div class="amort-jump" id="invScheduleJump">
     <button id="invjump-beginning" onclick="jumpInvSchedule('beginning')">Beginning</button>
     <button id="invjump-current" class="active" onclick="jumpInvSchedule('current')">Current</button>
-    ${doublingRow?`<button id="invjump-doubled" onclick="jumpInvSchedule('doubled')">2&times;</button>`:''}
+    ${multiplierRows.length ? `<button id="invjump-mult" onclick="jumpInvMultiplier('${id}')">${multiplierRows[0].mult}&times;</button>` : ''}
     <button id="invjump-end" onclick="jumpInvSchedule('end')">End</button>
   </div>
   <div class="amort-window scrollx" id="invScheduleWindow">
@@ -2815,9 +2962,9 @@ function renderInvestmentDetail(id){
     <thead><tr><th>Date</th><th>Interest</th><th>Added</th><th>Balance</th></tr></thead>
     <tbody>
     ${schedule.map((r,i)=>{
-      const isDoubled = doublingRow && r.date.getTime()===doublingRow.date.getTime();
-      const rowId = i===0 ? 'invrow-current' : isDoubled ? 'invrow-doubled' : (i===schedule.length-1 ? 'invrow-last' : '');
-      return `<tr id="${rowId}" class="${isDoubled?'state-current':''}">
+      const hitMult = multiplierRows.find(x=>x.row.date.getTime()===r.date.getTime());
+      const rowId = i===0 ? 'invrow-current' : hitMult ? 'invrow-mult'+hitMult.mult : (i===schedule.length-1 ? 'invrow-last' : '');
+      return `<tr id="${rowId}" class="${hitMult?'state-current':''}">
         <td>${fmtMonth(r.date)}</td>
         <td class="p">${fmt$(r.interest)}</td>
         <td style="color:${r.added>=0?'var(--principal)':'var(--interest)'};">${r.added!==0?fmtSigned$(r.added):'&ndash;'}</td>
@@ -2943,8 +3090,9 @@ function renderSettings(){
     <div class="row-line"><span class="l">Export data (.json)</span><button class="selectchip" onclick="exportData()">Export</button></div>
     <div class="row-line"><span class="l">Import data (.json)</span><button class="selectchip" onclick="triggerImport()">Import</button></div>
     <input id="importFileInput" type="file" accept="application/json,.json" style="display:none" onchange="handleImportFile(this)"/>
+    <div class="row-line"><span class="l">Reset to built-in data</span><button class="selectchip" style="color:var(--danger); background:var(--interest-soft);" onclick="resetLocalData()">Reset</button></div>
   </div>
-  <details class="footnote" style="margin-bottom:6px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Everything you enter is saved on this device automatically. Export creates a file you can send to someone else (or save to a shared folder like iCloud Drive) &mdash; they Import it into their own copy to get your numbers. Nothing is ever uploaded anywhere on its own.</div></details>
+  <details class="footnote" style="margin-bottom:6px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Everything you enter is saved on this device automatically, and that saved copy is what loads every time &mdash; including ahead of any update to the app itself, so a new property or feature can be invisible here until you reset. Export creates a file you can send to someone else (or save to a shared folder like iCloud Drive) &mdash; they Import it into their own copy to get your numbers. Reset clears what's saved on this device and reloads the app's built-in data instead &mdash; use it after an update, or Export first if you want to keep your changes. Nothing is ever uploaded anywhere on its own.</div></details>
   `;
 }
 
