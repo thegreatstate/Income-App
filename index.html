@@ -350,6 +350,25 @@ function prop_delete(id){
 }
 function prop_setName(id, val){ const p=findProperty(id); if(p) p.name=val; render(); }
 function prop_setType(id, val){ const p=findProperty(id); if(p) p.type=val; render(); }
+/* Value is deliberately manual, same philosophy as investment balances elsewhere in the app
+   ("what you tell it, not computed") — purchase price is the anchor, estimated value is an
+   optional, occasionally-updated override, not an auto-appreciation model. Equity/net worth
+   simply aren't counted for a property until one of these is actually set — better an honestly
+   partial number than a silently wrong one built on a guess. */
+function prop_setPurchasePrice(id, v){ const p=findProperty(id); if(p) p.purchasePrice = numFrom(v)||null; render(); }
+function prop_setEstimatedValue(id, v){ const p=findProperty(id); if(p){ p.estimatedValue = numFrom(v)||null; p.estimatedValueDate = mkey(TODAY)+'-01'; } render(); }
+function propertyValue(p){ return p.estimatedValue || p.purchasePrice || null; }
+function propertyEquity(p){ const v = propertyValue(p); if(v==null) return null; return v - propertyCurrent(p).balance; }
+function netWorthTotals(){
+  let equity=0, valuedCount=0;
+  properties.forEach(p=>{ const eq = propertyEquity(p); if(eq!=null){ valuedCount++; equity += eq; } });
+  const invTotal = investments.filter(i=>i.committed!==false).reduce((s,i)=>s+(i.balance||0),0);
+  let otherLoansTotal = 0;
+  properties.forEach(p=>(p.otherLoans||[]).forEach(l=>{ otherLoansTotal += currentRow(l.id).balance; }));
+  standaloneLoans.forEach(l=>{ if(l.committed!==false) otherLoansTotal += currentRow(l.id).balance; });
+  return { netWorth: equity+invTotal-otherLoansTotal, equity, invTotal, otherLoansTotal, valuedCount, totalProps: properties.length, unvaluedCount: properties.length-valuedCount };
+}
+function netWorth_showBreakdown(){ openSheet({type:'netWorthBreakdown'}); }
 function unit_add(propId){
   const p = findProperty(propId);
   if(!p) return;
@@ -1081,15 +1100,21 @@ function setSort(key){ if(state.sort===key){state.sortDir*=-1;} else {state.sort
 
 function renderPortfolio(){
   const tot = portfolioTotals();
+  const nw = netWorthTotals();
   const yrs = portfolioYearsLeft(state.settings.weightedYears);
   const sorted = [...properties].sort((a,b)=>(SORTS[state.sort].fn(a)-SORTS[state.sort].fn(b))*state.sortDir);
   return `
   <div class="header">
     <h1>Portfolio</h1>
     <div style="display:flex; gap:8px; align-items:center;">
-      <details class="footnote" style="margin:0; position:relative;"><summary class="info-btn">&#9432;</summary><div class="footnote-body" style="position:absolute; right:0; top:28px; width:260px; background:var(--surface-3); border:1px solid var(--border); border-radius:12px; padding:12px 14px; z-index:20; font-size:12px; line-height:1.5;">Total balance is every mortgage still owed across the portfolio &mdash; debt, not net worth. Tap any number below to see how it's built.</div></details>
+      <details class="footnote" style="margin:0; position:relative;"><summary class="info-btn">&#9432;</summary><div class="footnote-body" style="position:absolute; right:0; top:28px; width:260px; background:var(--surface-3); border:1px solid var(--border); border-radius:12px; padding:12px 14px; z-index:20; font-size:12px; line-height:1.5;">Net Worth is property equity plus investments, minus other loans &mdash; property values are whatever you've entered, not automatic. Total balance below it is every mortgage still owed, not net worth. Tap any number to see how it's built.</div></details>
       <div class="iconbtn" onclick="push({type:'settings'})">${tabIcon('gear')}</div>
     </div>
+  </div>
+  <div class="card" style="margin-bottom:10px; cursor:pointer;" onclick="netWorth_showBreakdown()">
+    <div class="dim" style="font-size:12.5px;">Net Worth &mdash; ${fmtMonth(TODAY)}</div>
+    <div class="big-number" style="margin-top:4px; color:var(--accent);">${fmt$(nw.netWorth)}</div>
+    <div class="dim" style="font-size:11.5px; margin-top:6px;">${nw.unvaluedCount>0 ? `${nw.valuedCount} of ${nw.totalProps} properties valued &mdash; partial number, tap to add the rest` : 'Property equity + investments, minus other loans'}</div>
   </div>
   <div class="card">
     <div class="dim" style="font-size:12.5px;">Total balance &mdash; ${fmtMonth(TODAY)}</div>
@@ -1393,6 +1418,22 @@ function renderLoanFieldsSection(prop){
     <div class="row-line"><span class="l">Rate</span><span style="display:flex; align-items:center; gap:6px;"><input type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-loan-rate',loan.rate||'')}" oninput="RAW['in-loan-rate']=this.value; propLoan_set('${loan.id}','rate',this.value)"/><span class="dim" style="font-size:12.5px;">%</span></span></div>
     <div class="row-line"><span class="l">Term</span><span style="display:flex; align-items:center; gap:6px;"><input type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-loan-term',loan.term||'')}" oninput="RAW['in-loan-term']=this.value; propLoan_set('${loan.id}','term',this.value)"/><span class="dim" style="font-size:12.5px;">mo</span></span></div>
     <div class="row-line"><span class="l">Start date</span><input type="month" value="${mkey(parseD(loan.start))}" oninput="propLoan_set('${loan.id}','start',this.value)" style="background:none;border:none;color:var(--text);font-family:var(--font-mono);font-size:14px;font-weight:700;outline:none; text-align:right;"/></div>
+  </div>`;
+}
+function renderValueSection(prop, editing){
+  const value = propertyValue(prop);
+  if(!editing && value==null) return '';
+  return `
+  <div class="section-label" style="margin-top:18px;">Value</div>
+  <div class="card">
+    ${editing ? `
+    <div class="row-line"><span class="l">Purchase price</span><span style="display:flex; align-items:center; gap:6px;"><span class="suffix">$</span><input type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-prop-purchase-'+prop.id, prop.purchasePrice||'')}" oninput="RAW['in-prop-purchase-${prop.id}']=this.value; prop_setPurchasePrice('${prop.id}',this.value)"/></span></div>
+    <div class="row-line"><span class="l">Estimated value <span class="faint">(optional)</span></span><span style="display:flex; align-items:center; gap:6px;"><span class="suffix">$</span><input type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-prop-estval-'+prop.id, prop.estimatedValue||'')}" oninput="RAW['in-prop-estval-${prop.id}']=this.value; prop_setEstimatedValue('${prop.id}',this.value)"/></span></div>
+    ${prop.estimatedValueDate ? `<div class="dim" style="font-size:10.5px; margin-top:2px;">Estimated value as of ${fmtMonth(parseD(prop.estimatedValueDate))}</div>` : `<div class="dim" style="font-size:10.5px; margin-top:2px;">No estimate set &mdash; purchase price is used until you add one.</div>`}
+    ` : `
+    <div class="row-line"><span class="l">${prop.estimatedValue?'Estimated value':'Purchase price'}</span><span class="v">${fmt$(value)}</span></div>
+    <div class="row-line"><span class="l">Equity</span><span class="v" style="color:${propertyEquity(prop)>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(propertyEquity(prop))}</span></div>
+    `}
   </div>`;
 }
 function renderInterestSection(prop){
@@ -1709,6 +1750,29 @@ function renderSheet(){
       <div class="row-line" style="border-top:1px solid var(--border); margin-top:4px; padding-top:10px;"><span class="l" style="font-weight:700; color:var(--text);">Total</span><span class="v" style="font-weight:700;">${fmt$(t[category]||0)}</span></div>
     </div></div>`;
   }
+  if(s.type==='netWorthBreakdown'){
+    const nw = netWorthTotals();
+    const rows = properties.map(p=>({ name: displayName(p), amount: propertyEquity(p) }));
+    const rowsHtml = rows.map(r=> r.amount==null
+      ? `<div class="row-line"><span class="l">${r.name}</span><span class="v dim" style="font-size:12px;">No value set</span></div>`
+      : `<div class="row-line"><span class="l">${r.name}</span><span class="v" style="color:${r.amount>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(r.amount)}</span></div>`
+    ).join('');
+    return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
+      <div class="sheet-handle"></div>
+      ${sheetHead('Net Worth', fmtMonth(TODAY), false)}
+      <div class="dim" style="font-size:12px; margin-bottom:8px;">Property equity (value minus loan balance), plus investment balances, minus other loans.</div>
+      <div class="dim" style="font-size:11px; text-transform:uppercase; letter-spacing:.06em; font-weight:700; margin-bottom:2px;">Property equity</div>
+      ${rowsHtml}
+      <div class="dim" style="font-size:11px; text-transform:uppercase; letter-spacing:.06em; font-weight:700; margin:14px 0 2px;">Investments</div>
+      <div class="row-line"><span class="l">Total balance</span><span class="v" style="color:var(--principal);">${fmt$(nw.invTotal)}</span></div>
+      ${nw.otherLoansTotal>0.5 ? `
+      <div class="dim" style="font-size:11px; text-transform:uppercase; letter-spacing:.06em; font-weight:700; margin:14px 0 2px;">Other loans</div>
+      <div class="row-line"><span class="l">Total</span><span class="v" style="color:var(--interest);">${fmtSigned$(-nw.otherLoansTotal)}</span></div>
+      ` : ''}
+      <div class="row-line" style="border-top:1px solid var(--border); margin-top:8px; padding-top:10px;"><span class="l" style="font-weight:700; color:var(--text);">Net Worth</span><span class="v" style="font-weight:700;">${fmt$(nw.netWorth)}</span></div>
+      ${nw.unvaluedCount>0 ? `<div class="dim" style="font-size:11px; margin-top:8px;">${nw.unvaluedCount} of ${nw.totalProps} properties don&rsquo;t have a value set yet &mdash; add one on each property&rsquo;s own page for a complete number.</div>` : ''}
+    </div></div>`;
+  }
   if(s.type==='portfolioBreakdown'){
     const kind = s.kind;
     const tot = portfolioTotals();
@@ -2007,6 +2071,7 @@ function renderDebtFreePropertyDetail(propId){
     <div class="dim" style="font-size:11.5px; margin-top:4px;">Debt-free &mdash; no mortgage on this property</div>
   </div>
   ${linkGridRow(prop, cf)}
+  ${renderValueSection(prop, editing)}
   ${renderRevenueSection(prop, editing)}
   ${renderCostsSection(prop, editing)}
   <div class="footnote" style="margin-top:18px; margin-bottom:6px;">No loan on this property, so there's no amortization or extra-payment planner to show &mdash; just revenue and costs.</div>
@@ -2063,6 +2128,7 @@ function renderLoanDetail(propId){
 
   ${!prop.isStandaloneLoan && editing ? renderLoanFieldsSection(prop) : ''}
   ${!prop.isStandaloneLoan ? linkGridRow(prop, propertyCashFlow(prop)) : ''}
+  ${!prop.isStandaloneLoan ? renderValueSection(prop, editing) : ''}
   ${!prop.isStandaloneLoan ? renderRevenueSection(prop, editing) : ''}
   ${!prop.isStandaloneLoan ? renderCostsSection(prop, editing) : ''}
   ${!prop.isStandaloneLoan ? renderInterestSection(prop) : ''}
