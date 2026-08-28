@@ -1026,7 +1026,7 @@ function portfolioYearsLeft(weighted){
 /* ============ FORMATTERS ============ */
 const state = { tab:'fvm', pushed:null, sheet:null, sheetEdit:false, propEdit:false, sort:'balance', sortDir:1,
   settings:{ showCents:false, weightedYears:true, monthlySpending:9000, spendingPctOfInterest:10, privacyMode:false,
-    tax:{ enabled:false,
+    tax:{ enabled:false, mode:'auto', manualQuarterlyAmount:0,
       fedBrackets:[ {threshold:0, rate:10}, {threshold:23200, rate:12}, {threshold:94300, rate:22}, {threshold:201050, rate:24} ],
       stateKey:'MT', stateRate:5, otherIncome:0, otherQualifiedIncome:0, useNIIT:true, bracketInflationPct:2.5, dueMonths:[4,6,9,1] } },
   settingsOpen:{ general:true, pm:false, defaults:false, rates:false, events:false, estTax:false },
@@ -1118,9 +1118,20 @@ function handleImportFile(input){
 }
 
 function numFrom(v){ return Number(String(v).replace(/[^0-9.\-]/g,''))||0; }
+/* Privacy mode's number side — coarsens whatever's displayed, on top of the name-pseudonym
+   swap above, so a glance at the screen doesn't hand over exact figures either. Six-figure-
+   plus amounts round to the nearest $100k, four/five-figure amounts to the nearest $100,
+   and anything smaller to the nearest $10 &mdash; same "flip it back off and it's exact again"
+   deal, nothing underlying ever touched. */
+function privacyRound(n){
+  const sign = n<0?-1:1, abs = Math.abs(n);
+  const step = abs>=100000 ? 100000 : abs>=1000 ? 100 : 10;
+  return sign*Math.round(abs/step)*step;
+}
 function fmt$(n){
   n = Math.round(n*100)/100 || 0;
-  const cents = state.settings.showCents;
+  if(state.settings.privacyMode) n = privacyRound(n);
+  const cents = state.settings.showCents && !state.settings.privacyMode;
   return '$'+n.toLocaleString('en-US',{minimumFractionDigits:cents?2:0, maximumFractionDigits:cents?2:0});
 }
 function fmtSigned$(n){ return (n<0?'-':'+')+fmt$(Math.abs(n)); }
@@ -1519,7 +1530,8 @@ function linkGridRow(prop, cf){
     <div style="text-align:center;"><span class="dim" style="font-size:13px;">Costs</span><div class="subval mono" style="color:var(--interest)">${fmt$(costs.total)}/mo</div></div>
     <div style="text-align:center;"><span class="dim" style="font-size:13px;">Revenue</span><div class="subval mono" style="color:var(--principal)">${fmt$(revenue)}/mo</div></div>
     <div style="text-align:right;"><span class="dim" style="font-size:13px;">Profit</span><div class="subval mono" style="color:${cf>=0?'var(--principal)':'var(--interest)'}">${fmtSigned$(cf)}/mo</div></div>
-  </div>`;
+  </div>
+  <div class="dim" style="font-size:10px; margin-top:4px;">Interest is shown for reference &mdash; it's already part of Costs, not an amount on top of it.</div>`;
 }
 /* ---- Shared Revenue/Costs/Interest sections, inlined on the property's own detail page
    instead of separate sheets — every editable thing about a property lives on one page. ---- */
@@ -3327,6 +3339,7 @@ function incomeSourceCard(src){
     ? `state.returnToSheet={type:'incomeList', kind:'${returnKind}'}; closeSheet(); push({type:'loan', id:'${src.id.slice(5)}'})`
     : `state.returnToSheet={type:'incomeList', kind:'${returnKind}'}; closeSheet(); push({type:'investment', id:'${src.id.slice(4)}'})`;
   const inv = src.kind==='investment' ? findInvestment(src.id.slice(4)) : null;
+  const prop = src.kind==='property' ? findProperty(src.id.slice(5)) : null;
   return `<div class="prop-card" onclick="${onclick}">
     <div class="prop-top">
       <div><div class="prop-name" style="font-size:15px;">${src.name}</div><div class="prop-sub">${src.sub}</div></div>
@@ -3335,6 +3348,7 @@ function incomeSourceCard(src){
         ${inv ? `<div class="dim" style="font-size:11.5px; margin-top:1px;">${fmt$(inv.balance)} total</div>` : ''}
       </div>
     </div>
+    ${prop ? linkGridRow(prop, src.amount) : ''}
   </div>`;
 }
 
@@ -3896,6 +3910,8 @@ function tax_setOtherQualified(v){ RAW['in-tax-otherqual']=v; state.settings.tax
 function tax_setStateKey(v){ state.settings.tax.stateKey = v; render(); }
 function tax_toggleNIIT(){ state.settings.tax.useNIIT = !state.settings.tax.useNIIT; render(); }
 function tax_setBracketInflation(v){ RAW['in-tax-inflation']=v; state.settings.tax.bracketInflationPct = parseFloat(v)||0; render(); }
+function tax_setMode(m){ state.settings.tax.mode = m; render(); }
+function tax_setManualQuarterly(v){ RAW['in-tax-manualqtr']=v; state.settings.tax.manualQuarterlyAmount = numFrom(v); render(); }
 const SETTINGS_REF_KEYS = ['pm','defaults','rates','events','estTax'];
 function settings_toggleSection(key){ state.settingsOpen[key] = !state.settingsOpen[key]; render(); }
 function settings_toggleAllRef(){
@@ -3991,6 +4007,20 @@ function renderSettings(){
       <div class="toggle ${s.tax.enabled?'on':''}" onclick="tax_toggleEnabled()"><div class="knob"></div></div>
     </div>
 
+    <div class="dim" style="font-size:11px; margin:14px 0 4px; text-transform:uppercase; letter-spacing:.06em; font-weight:700;">Method</div>
+    <div class="seg" style="margin-bottom:4px;">
+      <button class="${s.tax.mode!=='manual'?'active':''}" onclick="tax_setMode('auto')">Estimate for me</button>
+      <button class="${s.tax.mode==='manual'?'active':''}" onclick="tax_setMode('manual')">I&rsquo;ll enter my own</button>
+    </div>
+
+    ${s.tax.mode==='manual' ? `
+    <div class="dim" style="font-size:11px; margin:14px 0 4px; text-transform:uppercase; letter-spacing:.06em; font-weight:700;">Quarterly payment</div>
+    <div class="row-line">
+      <span class="l">Amount per quarter</span>
+      <span style="display:flex; align-items:center; gap:6px;"><span class="suffix">$</span><input id="in-tax-manualqtr" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-tax-manualqtr',s.tax.manualQuarterlyAmount||'')}" oninput="tax_setManualQuarterly(this.value)"/></span>
+    </div>
+    <div class="dim" style="font-size:10.5px; margin-top:2px;">Whatever your own number comes out to &mdash; accountant, last year's actual, a round estimate &mdash; deducted straight from FVM's shared pool on each due month below instead of the bracket math.</div>
+    ` : `
     <div class="dim" style="font-size:11px; margin:14px 0 4px; text-transform:uppercase; letter-spacing:.06em; font-weight:700;">Other household income</div>
     <div class="row-line">
       <span class="l">Outside FVM (wages, etc.)</span>
@@ -4042,6 +4072,7 @@ function renderSettings(){
       <span style="display:flex; align-items:center; gap:6px;"><input id="in-tax-inflation" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-tax-inflation',s.tax.bracketInflationPct)}" oninput="tax_setBracketInflation(this.value)"/><span class="dim" style="font-size:12.5px;">%/yr</span></span>
     </div>
     <div class="dim" style="font-size:10.5px; margin-top:2px;">Federal/state brackets escalate by this rate over FVM's projection, matching how the IRS actually indexes them &mdash; otherwise 30 years of ordinary compounding looks like climbing tax brackets even with flat real income.</div>
+    `}
 
     <div class="dim" style="font-size:11px; margin:14px 0 4px; text-transform:uppercase; letter-spacing:.06em; font-weight:700;">Quarterly payment months</div>
     <div class="sort-row" style="margin:2px 0 0;">
@@ -4158,32 +4189,39 @@ function fvmBalanceSeries(monthsCount, excludePropId, boostSpec, excludeFromIdx)
     // out of that same source (property income before it joins the shared pool; investment
     // balance directly) rather than a single household draw.
     if(i>0 && tax_isDueMonth(date)){
-      const yearsFromNow = i/12;
-      let fvmOrdinary = 0;
-      const ordByProp = {}, ordByInv = {};
-      properties.forEach(p=>{ const a = propertyTaxableIncomeAtDate(p, date)*12; ordByProp['prop:'+p.id]=a; fvmOrdinary+=a; });
-      invs.forEach(inv=>{
-        const a = investmentTaxTreatment(inv)==='ordinary' ? interestByInv[inv.id][i]*12 : 0;
-        ordByInv[inv.id]=a; fvmOrdinary+=a;
-      });
-      const otherIncome = state.settings.tax.otherIncome||0;
-      const otherQual = state.settings.tax.otherQualifiedIncome||0;
-      const taxWithout = householdTax(otherIncome, 0, otherQual, otherQual, yearsFromNow);
-      const taxWith = householdTax(otherIncome, fvmOrdinary, otherQual, otherQual+fvmOrdinary, yearsFromNow);
-      const quarterlyTax = Math.max(0, taxWith-taxWithout)/4;
-      if(quarterlyTax>0 && fvmOrdinary>0){
-        properties.forEach(p=>{
-          const share = ordByProp['prop:'+p.id]/fvmOrdinary;
-          if(share<=0) return;
-          const amt = quarterlyTax*share;
-          propCFByProp[p.id] -= amt; propLoan -= amt; taxFromProps[i] += amt;
-        });
+      if(state.settings.tax.mode==='manual'){
+        // Your own number (accountant, last year's actual, whatever) — no bracket math,
+        // no per-source attribution, just a flat draw from the shared pool each due month.
+        const amt = Math.max(0, state.settings.tax.manualQuarterlyAmount||0);
+        if(amt>0){ propLoan -= amt; taxFromProps[i] += amt; }
+      } else {
+        const yearsFromNow = i/12;
+        let fvmOrdinary = 0;
+        const ordByProp = {}, ordByInv = {};
+        properties.forEach(p=>{ const a = propertyTaxableIncomeAtDate(p, date)*12; ordByProp['prop:'+p.id]=a; fvmOrdinary+=a; });
         invs.forEach(inv=>{
-          const share = ordByInv[inv.id]/fvmOrdinary;
-          if(share<=0) return;
-          const amt = quarterlyTax*share;
-          bals[inv.id] = Math.max(0, bals[inv.id]-amt); taxFromInvs[i] += amt;
+          const a = investmentTaxTreatment(inv)==='ordinary' ? interestByInv[inv.id][i]*12 : 0;
+          ordByInv[inv.id]=a; fvmOrdinary+=a;
         });
+        const otherIncome = state.settings.tax.otherIncome||0;
+        const otherQual = state.settings.tax.otherQualifiedIncome||0;
+        const taxWithout = householdTax(otherIncome, 0, otherQual, otherQual, yearsFromNow);
+        const taxWith = householdTax(otherIncome, fvmOrdinary, otherQual, otherQual+fvmOrdinary, yearsFromNow);
+        const quarterlyTax = Math.max(0, taxWith-taxWithout)/4;
+        if(quarterlyTax>0 && fvmOrdinary>0){
+          properties.forEach(p=>{
+            const share = ordByProp['prop:'+p.id]/fvmOrdinary;
+            if(share<=0) return;
+            const amt = quarterlyTax*share;
+            propCFByProp[p.id] -= amt; propLoan -= amt; taxFromProps[i] += amt;
+          });
+          invs.forEach(inv=>{
+            const share = ordByInv[inv.id]/fvmOrdinary;
+            if(share<=0) return;
+            const amt = quarterlyTax*share;
+            bals[inv.id] = Math.max(0, bals[inv.id]-amt); taxFromInvs[i] += amt;
+          });
+        }
       }
     }
     const spending = effectiveSpendingAtDate(date, totalInterest);
@@ -4271,7 +4309,7 @@ function fvmGrowthBreakdownAt(dateStr){
   const loanItems = standaloneLoans.filter(l=>l.committed!==false).map(l=>({name:displayName(findProperty(l.id))||'Loan', amount: -standaloneLoanPaymentAtDate(l.id, date)}));
   const invItems = investments.filter(i=>i.committed!==false).map(i=>({name:displayName(i), amount: interestByInv[i.id] ? interestByInv[i.id][idx] : 0}));
   const taxAmt = taxFromProps ? taxFromProps[idx] : 0;
-  const taxItems = taxAmt>0.5 ? [{name:'Estimated taxes', amount:-taxAmt}] : [];
+  const taxItems = taxAmt>0.5 ? [{name: state.settings.tax.mode==='manual'?'Quarterly tax payment':'Estimated taxes', amount:-taxAmt}] : [];
   const receivables = [...propItems, ...loanItems, ...invItems, ...taxItems];
   const totalReceivables = receivables.reduce((s,x)=>s+x.amount,0);
   const investmentInterest = invItems.reduce((s,x)=>s+x.amount,0);
