@@ -1464,9 +1464,9 @@ function renderLoanFieldsSection(prop){
   return `
   <div class="section-label" style="margin-top:18px;">Loan</div>
   <div class="card">
-    <div class="row-line"><span class="l">Original amount</span><span style="display:flex; align-items:center; gap:6px;"><span class="suffix">$</span><input type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-loan-original',loan.original||'')}" oninput="RAW['in-loan-original']=this.value; propLoan_set('${loan.id}','original',this.value)"/></span></div>
-    <div class="row-line"><span class="l">Rate</span><span style="display:flex; align-items:center; gap:6px;"><input type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-loan-rate',loan.rate||'')}" oninput="RAW['in-loan-rate']=this.value; propLoan_set('${loan.id}','rate',this.value)"/><span class="dim" style="font-size:12.5px;">%</span></span></div>
-    <div class="row-line"><span class="l">Term</span><span style="display:flex; align-items:center; gap:6px;"><input type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-loan-term',loan.term||'')}" oninput="RAW['in-loan-term']=this.value; propLoan_set('${loan.id}','term',this.value)"/><span class="dim" style="font-size:12.5px;">mo</span></span></div>
+    <div class="row-line"><span class="l">Original amount</span><span style="display:flex; align-items:center; gap:6px;"><span class="suffix">$</span><input id="in-loan-original" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-loan-original',loan.original||'')}" oninput="RAW['in-loan-original']=this.value; propLoan_set('${loan.id}','original',this.value)"/></span></div>
+    <div class="row-line"><span class="l">Rate</span><span style="display:flex; align-items:center; gap:6px;"><input id="in-loan-rate" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-loan-rate',loan.rate||'')}" oninput="RAW['in-loan-rate']=this.value; propLoan_set('${loan.id}','rate',this.value)"/><span class="dim" style="font-size:12.5px;">%</span></span></div>
+    <div class="row-line"><span class="l">Term</span><span style="display:flex; align-items:center; gap:6px;"><input id="in-loan-term" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-loan-term',loan.term||'')}" oninput="RAW['in-loan-term']=this.value; propLoan_set('${loan.id}','term',this.value)"/><span class="dim" style="font-size:12.5px;">mo</span></span></div>
     <div class="row-line"><span class="l">Start date</span><input type="month" value="${mkey(parseD(loan.start))}" oninput="propLoan_set('${loan.id}','start',this.value)" style="background:none;border:none;color:var(--text);font-family:var(--font-mono);font-size:14px;font-weight:700;outline:none; text-align:right;"/></div>
   </div>`;
 }
@@ -1477,8 +1477,8 @@ function renderValueSection(prop, editing){
   <div class="section-label" style="margin-top:18px;">Value</div>
   <div class="card">
     ${editing ? `
-    <div class="row-line"><span class="l">Purchase price</span><span style="display:flex; align-items:center; gap:6px;"><span class="suffix">$</span><input type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-prop-purchase-'+prop.id, prop.purchasePrice||'')}" oninput="RAW['in-prop-purchase-${prop.id}']=this.value; prop_setPurchasePrice('${prop.id}',this.value)"/></span></div>
-    <div class="row-line"><span class="l">Estimated value <span class="faint">(optional)</span></span><span style="display:flex; align-items:center; gap:6px;"><span class="suffix">$</span><input type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-prop-estval-'+prop.id, prop.estimatedValue||'')}" oninput="RAW['in-prop-estval-${prop.id}']=this.value; prop_setEstimatedValue('${prop.id}',this.value)"/></span></div>
+    <div class="row-line"><span class="l">Purchase price</span><span style="display:flex; align-items:center; gap:6px;"><span class="suffix">$</span><input id="in-prop-purchase-${prop.id}" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-prop-purchase-'+prop.id, prop.purchasePrice||'')}" oninput="RAW['in-prop-purchase-${prop.id}']=this.value; prop_setPurchasePrice('${prop.id}',this.value)"/></span></div>
+    <div class="row-line"><span class="l">Estimated value <span class="faint">(optional)</span></span><span style="display:flex; align-items:center; gap:6px;"><span class="suffix">$</span><input id="in-prop-estval-${prop.id}" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-prop-estval-'+prop.id, prop.estimatedValue||'')}" oninput="RAW['in-prop-estval-${prop.id}']=this.value; prop_setEstimatedValue('${prop.id}',this.value)"/></span></div>
     ${prop.estimatedValueDate ? `<div class="dim" style="font-size:10.5px; margin-top:2px;">Estimated value as of ${fmtMonth(parseD(prop.estimatedValueDate))}</div>` : `<div class="dim" style="font-size:10.5px; margin-top:2px;">No estimate set &mdash; purchase price is used until you add one.</div>`}
     ` : `
     <div class="row-line"><span class="l">${prop.estimatedValue?'Estimated value':'Purchase price'}</span><span class="v">${fmt$(value)}</span></div>
@@ -1782,7 +1782,7 @@ function renderSheet(){
     const rows = scenarios.map(sc=>{
       const amt = sc.amount==null ? cur : sc.amount;
       const amtCell = sc.editable
-        ? `<span class="suffix">$</span><input type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-spendcmp-'+sc.key, sc.amount||'')}" oninput="RAW['in-spendcmp-${sc.key}']=this.value; spendCompare_set('${sc.key}',this.value)"/>`
+        ? `<span class="suffix">$</span><input id="in-spendcmp-${sc.key}" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-spendcmp-'+sc.key, sc.amount||'')}" oninput="RAW['in-spendcmp-${sc.key}']=this.value; spendCompare_set('${sc.key}',this.value)"/>`
         : `<span class="v">${fmt$(amt)}</span>`;
       return `<div class="cost-row" style="margin-bottom:10px;">
         <div class="top"><span class="l">${sc.label}</span><span style="display:flex; align-items:center; gap:6px;">${amtCell}</span></div>
@@ -2172,8 +2172,8 @@ function renderDebtFreePropertyDetail(propId){
   </div>
   <div class="card" style="padding:14px 16px;">
     <div style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;">
-      ${editing ? `<input type="text" value="${prop.name}" oninput="prop_setName('${propId}',this.value)" placeholder="Property name" style="font-size:18px; font-weight:700; background:none; border:none; color:var(--text); font-family:var(--font-ui); outline:none; padding:0; flex:1; min-width:0;"/>` : `<div style="font-size:18px; font-weight:700;">${displayName(prop)}</div>`}
-      ${editing ? `<input type="text" value="${prop.type}" oninput="prop_setType('${propId}',this.value)" placeholder="Type" style="font-size:11.5px; background:none; border:none; color:var(--text-dim); font-family:var(--font-ui); outline:none; padding:0; text-align:right; width:100px; flex:0 0 auto;"/>` : `<div class="dim" style="font-size:11.5px; white-space:nowrap;">${prop.type}</div>`}
+      ${editing ? `<input id="in-prop-name-${propId}" type="text" value="${prop.name}" oninput="prop_setName('${propId}',this.value)" placeholder="Property name" style="font-size:18px; font-weight:700; background:none; border:none; color:var(--text); font-family:var(--font-ui); outline:none; padding:0; flex:1; min-width:0;"/>` : `<div style="font-size:18px; font-weight:700;">${displayName(prop)}</div>`}
+      ${editing ? `<input id="in-prop-type-${propId}" type="text" value="${prop.type}" oninput="prop_setType('${propId}',this.value)" placeholder="Type" style="font-size:11.5px; background:none; border:none; color:var(--text-dim); font-family:var(--font-ui); outline:none; padding:0; text-align:right; width:100px; flex:0 0 auto;"/>` : `<div class="dim" style="font-size:11.5px; white-space:nowrap;">${prop.type}</div>`}
     </div>
     <div class="big-number" style="margin-top:3px; font-size:27px; color:${cf>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(cf)}/mo</div>
     <div class="dim" style="font-size:11.5px; margin-top:4px;">Debt-free &mdash; no mortgage on this property</div>
@@ -2213,8 +2213,8 @@ function renderLoanDetail(propId){
 
   <div class="card" style="padding:14px 16px;">
     <div style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;">
-      ${editing && !prop.isStandaloneLoan ? `<input type="text" value="${prop.name}" oninput="prop_setName('${propId}',this.value)" placeholder="Property name" style="font-size:18px; font-weight:700; background:none; border:none; color:var(--text); font-family:var(--font-ui); outline:none; padding:0; flex:1; min-width:0;"/>` : `<div style="font-size:18px; font-weight:700;">${displayName(prop)}</div>`}
-      ${editing && !prop.isStandaloneLoan ? `<input type="text" value="${prop.type}" oninput="prop_setType('${propId}',this.value)" placeholder="Type" style="font-size:11.5px; background:none; border:none; color:var(--text-dim); font-family:var(--font-ui); outline:none; padding:0; text-align:right; width:100px; flex:0 0 auto;"/>` : `<div class="dim" style="font-size:11.5px; white-space:nowrap;">${prop.type}</div>`}
+      ${editing && !prop.isStandaloneLoan ? `<input id="in-prop-name-${propId}" type="text" value="${prop.name}" oninput="prop_setName('${propId}',this.value)" placeholder="Property name" style="font-size:18px; font-weight:700; background:none; border:none; color:var(--text); font-family:var(--font-ui); outline:none; padding:0; flex:1; min-width:0;"/>` : `<div style="font-size:18px; font-weight:700;">${displayName(prop)}</div>`}
+      ${editing && !prop.isStandaloneLoan ? `<input id="in-prop-type-${propId}" type="text" value="${prop.type}" oninput="prop_setType('${propId}',this.value)" placeholder="Type" style="font-size:11.5px; background:none; border:none; color:var(--text-dim); font-family:var(--font-ui); outline:none; padding:0; text-align:right; width:100px; flex:0 0 auto;"/>` : `<div class="dim" style="font-size:11.5px; white-space:nowrap;">${prop.type}</div>`}
     </div>
     <div class="big-number" style="margin-top:3px; font-size:27px;">${fmt$(c.balance)}</div>
     <div class="stat-row" style="margin-top:10px;">
