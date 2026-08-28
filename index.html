@@ -797,7 +797,7 @@ const state = { tab:'fvm', pushed:null, sheet:null, sheetEdit:false, propEdit:fa
   income:{ sortDir:-1, sortKey:'amount', expanded:false, invEdit:false, invDraft:null },
   timelineDate:null, // shared "which month am I looking at" between FVM and Income's timelines
   yr1Idx:-1, yr5Idx:-1, multCursor:-1, // shared jump-button cursors, same reason
-  fvm:{ lump:500000, selectedCol:null,
+  fvm:{ lump:500000, lumpDirection:'add', lumpDate:null, selectedCol:null,
     whatIfOpen:false, saleOpen:false, salePropId:null, salePrice:0, saleCostPct:7, saleTaxPct:20 },
   lastSyncAt:null
 };
@@ -1558,6 +1558,10 @@ function renderSheet(){
         <button class="${f.saleOpen?'active':''}" onclick="state.fvm.saleOpen=true; render();">Sell a property</button>
       </div>
       ${!f.saleOpen ? `
+      <div class="seg" style="margin-bottom:8px;">
+        <button class="${f.lumpDirection!=='spend'?'active':''}" onclick="fvm_setLumpDirection('add')">Add (+)</button>
+        <button class="${f.lumpDirection==='spend'?'active':''}" onclick="fvm_setLumpDirection('spend')">Spend (&minus;)</button>
+      </div>
       <div class="input-row"><span class="suffix">$</span><input id="in-fvm-lump" type="text" inputmode="decimal" value="${rv('in-fvm-lump',f.lump||'')}" oninput="fvm_setLump(this.value)"/></div>
       ` : `
       <div class="dim" style="font-size:11px; margin-bottom:2px;">Which property</div>
@@ -1577,7 +1581,9 @@ function renderSheet(){
       <div class="mono" style="font-size:19px; font-weight:700;">${fmt$(netProceeds)}</div>
       ` : ''}
       `}
-      ${lump>0 ? `<div class="dim" style="font-size:11px; margin-top:12px;">Close this and select a column on the table to preview ${fmt$(lump)} going there${f.saleOpen&&f.salePropId?' &mdash; and that property&rsquo;s cash flow drops out of every column from the sale date on':''}.</div>` : ''}
+      <div class="dim" style="font-size:11px; margin:12px 0 2px;">When</div>
+      <input type="month" value="${mkey(f.lumpDate?parseD(f.lumpDate):TODAY)}" min="${mkey(TODAY)}" oninput="fvm_setLumpDate(this.value)" style="background:var(--surface-3); border:1px solid var(--border); border-radius:10px; padding:9px 11px; color:var(--text); font-family:var(--font-mono); font-size:14px; font-weight:700; width:100%;"/>
+      ${lump!==0 ? `<div class="dim" style="font-size:11px; margin-top:12px;">Close this and select a column on the table to preview ${fmtSigned$(lump)} going there in ${f.lumpDate?fmtMonth(parseD(f.lumpDate)):fmtMonth(TODAY)}${f.saleOpen&&f.salePropId?' &mdash; and that property&rsquo;s cash flow drops out of every column from that month on':''}.</div>` : ''}
     </div></div>`;
   }
   if(s.type==='fvmColDetail'){
@@ -2853,7 +2859,9 @@ function renderIncome(){
       <h1>Income</h1>
       <div style="display:flex; gap:8px; align-items:center;">
         <details class="footnote" style="margin:0; position:relative;"><summary class="info-btn">&#9432;</summary><div class="footnote-body" style="position:absolute; right:0; top:28px; width:260px; background:var(--surface-3); border:1px solid var(--border); border-radius:12px; padding:12px 14px; z-index:20; font-size:12px; line-height:1.5;">Real estate columns come from each loan's real schedule &mdash; rent and costs assumed to hold steady until you update them. Columns marked ~ are investments, projected at the current rate &mdash; not guaranteed, since markets move. Row for ${fmtMonth(TODAY)} is highlighted as the current month. Showing ${INCOME_MONTHS_AHEAD/12} years out.</div></details>
-        <div class="iconbtn" onclick="inv_openAdd()">+</div>
+        <div class="iconbtn" style="color:var(--principal); font-weight:800; font-size:18px;" onclick="inv_openQuickAction('add')" title="Add money">+</div>
+        <div class="iconbtn" style="color:var(--interest); font-weight:800; font-size:18px;" onclick="inv_openQuickAction('spend')" title="Spend / withdraw">&minus;</div>
+        <div class="iconbtn" onclick="inv_openAdd()" title="Add a new account">${tabIcon('coin')}</div>
         <div class="iconbtn" onclick="push({type:'settings'})">${tabIcon('gear')}</div>
       </div>
     </div>
@@ -3035,6 +3043,14 @@ function inv_openCellAction(invId, dateStr){
   state.invActionDraft = { amount:0, date:dateStr, direction:'debit', note:'', editingEventId:null };
   openSheet({type:'invCellAction', id:invId});
 }
+/* Same sheet as a cell tap, just entered from the header's +/− buttons instead — no
+   account or month picked yet, so the sheet grows an account picker and the date
+   becomes editable up front rather than being implied by whichever cell you tapped. */
+function inv_openQuickAction(direction){
+  state.invActionDraft = { amount:0, date:mkey(TODAY)+'-01', direction: direction==='spend'?'debit':'credit', note:'', editingEventId:null };
+  openSheet({type:'invCellAction', id:null});
+}
+function invAction_pickInv(id){ state.sheet.id = id; render(); }
 function invAction_setDirection(dir){ state.invActionDraft.direction = dir; render(); }
 function invAction_setNote(v){ state.invActionDraft.note = v; render(); }
 function inv_editCellEvent(invId, eventId){
@@ -3082,14 +3098,23 @@ function invAction_submitCell(status){
 }
 function renderInvCellActionSheet(){
   const { id } = state.sheet;
-  const inv = findInvestment(id);
+  const inv = id ? findInvestment(id) : null;
   const draft = state.invActionDraft;
   const isPastOrToday = parseD(draft.date)<=TODAY;
-  const existing = invCellEvents(inv, draft.date).filter(e=>e.id!==draft.editingEventId);
-  const canSubmit = draft.amount>0;
+  const existing = inv ? invCellEvents(inv, draft.date).filter(e=>e.id!==draft.editingEventId) : [];
+  const canSubmit = !!inv && draft.amount>0;
+  const otherAccounts = investments.filter(i=>i.committed!==false);
   return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
     <div class="sheet-handle"></div>
-    ${sheetHead(fmtMonth(parseD(draft.date)), displayName(inv), false)}
+    ${sheetHead(inv?fmtMonth(parseD(draft.date)):'Add / Withdraw', inv?displayName(inv):'Choose an account', false)}
+    <div class="dim" style="font-size:12px; margin-bottom:2px;">When</div>
+    <input type="month" value="${mkey(parseD(draft.date))}" oninput="invAction_setDate(this.value)" style="background:var(--surface-3); border:1px solid var(--border); border-radius:10px; padding:9px 11px; color:var(--text); font-family:var(--font-mono); font-size:14px; font-weight:700; width:100%; margin-bottom:10px;"/>
+    ${!inv ? `
+    <div class="dim" style="font-size:12px; margin-bottom:2px;">Account</div>
+    <div class="sort-row" style="margin:2px 0 0;">
+      ${otherAccounts.length===0 ? `<div class="dim" style="font-size:12.5px;">No investments yet &mdash; add one first.</div>` : otherAccounts.map(o=>`<div class="chip" onclick="invAction_pickInv('${o.id}')">${displayName(o)}</div>`).join('')}
+    </div>
+    ` : `
     ${existing.length? `
     <div class="dim" style="font-size:11px; text-transform:uppercase; letter-spacing:.06em; font-weight:700; margin-bottom:2px;">Already logged this month</div>
     ${existing.map(e=>`<div class="entry-row">
@@ -3123,6 +3148,7 @@ function renderInvCellActionSheet(){
     <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">This is a future month, so neither option touches today's real balance &mdash; both just shape the timeline projection from ${fmtMonth(parseD(draft.date))} forward. Reconcile the real balance yourself when it actually happens.</div></details>
     `}
     ${draft.editingEventId? `<div style="text-align:center; margin-top:10px;"><button class="btn-ghost-sm" onclick="inv_cancelCellEdit()">Cancel edit</button></div>`:''}
+    `}
   </div></div>`;
 }
 
@@ -3382,6 +3408,8 @@ const FVM_MONTHS = 360; // 30 years
 const FVM_1YR_STEPS = [1,2,3,4];
 const FVM_5YR_STEPS = [5,10,15,20,25,30,35,40,45,50];
 function fvm_setLump(v){ RAW['in-fvm-lump']=v; state.fvm.lump = parseFloat(v)||0; render(); }
+function fvm_setLumpDirection(dir){ state.fvm.lumpDirection = dir; render(); }
+function fvm_setLumpDate(v){ state.fvm.lumpDate = v ? v+'-01' : null; render(); }
 function fvm_toggleWhatIf(){ state.fvm.whatIfOpen = !state.fvm.whatIfOpen; render(); }
 function fvm_toggleSale(){ state.fvm.saleOpen = !state.fvm.saleOpen; render(); }
 function fvm_setSaleProp(id){ state.fvm.salePropId = id||null; render(); }
@@ -3405,8 +3433,9 @@ function fvmSaleNetProceeds(){
 function fvmEffectiveLump(){
   const f = state.fvm;
   if(!f.whatIfOpen) return 0;
-  if(f.saleOpen) return fvmSaleNetProceeds();
-  return f.lump||0;
+  if(f.saleOpen) return fvmSaleNetProceeds(); // a sale is always an inflow — the direction toggle only applies to a typed amount
+  const amt = f.lump||0;
+  return f.lumpDirection==='spend' ? -amt : amt;
 }
 function fvmEffectiveExcludeProp(){
   const f = state.fvm;
@@ -3416,11 +3445,15 @@ function fvmEffectiveExcludeProp(){
    just tracking running balance instead of monthly interest, and covering every account (not only
    the growth-share ones) so FVM can total the whole portfolio at each month with one walk instead
    of calling invBalanceAtDate per month (which would be O(months^2) again). */
-function fvmBalanceSeries(monthsCount, excludePropId){
+function fvmBalanceSeries(monthsCount, excludePropId, boostSpec, excludeFromIdx){
+  excludeFromIdx = excludeFromIdx||0;
   const invs = investments.filter(i=>i.committed!==false);
   const targets = growthShareTargets();
   const targetIds = new Set(targets.map(t=>t.id));
   const bals = {}; invs.forEach(inv=> bals[inv.id] = inv.balance||0);
+  if(boostSpec && boostSpec.idx===0 && bals[boostSpec.invId]!==undefined){
+    bals[boostSpec.invId] = Math.max(0, bals[boostSpec.invId]+boostSpec.amount);
+  }
   const result = {}; invs.forEach(inv=> result[inv.id] = new Array(monthsCount));
   const interestByInv = {}; invs.forEach(inv=> interestByInv[inv.id] = new Array(monthsCount));
   const growth = new Array(monthsCount); // total receivables minus spending draw, unclamped — same figure as Income's "Growth" stat, every month
@@ -3436,6 +3469,12 @@ function fvmBalanceSeries(monthsCount, excludePropId){
         bals[inv.id] = Math.max(0, bals[inv.id]);
       });
       targets.forEach(t=>{ (t.events||[]).forEach(e=>{ if(mkey(parseD(e.date))===mkey(date)) bals[t.id]+=invEventSign(e.type)*e.amount; }); });
+      // A future-dated what-if lump lands here, mid-walk, so it participates in growth-share
+      // allocation and compounding exactly like a real dated event would — same reason
+      // interestByInv is captured before allocation: order matters for every figure downstream.
+      if(boostSpec && boostSpec.idx===i && bals[boostSpec.invId]!==undefined){
+        bals[boostSpec.invId] = Math.max(0, bals[boostSpec.invId]+boostSpec.amount);
+      }
     }
     // Captured here, on the balance carried in before this month's growth-share allocation —
     // this is the exact figure that feeds "growth" below, so anything explaining growth
@@ -3446,7 +3485,7 @@ function fvmBalanceSeries(monthsCount, excludePropId){
     const targetsInterest = targets.reduce((s,t)=> s+interestByInv[t.id][i], 0);
     const totalInterest = nonGrowthInterest + targetsInterest;
     let propLoan = 0;
-    properties.forEach(p=>{ if(p.id!==excludePropId) propLoan += propertyCashFlowAtDate(p, date); });
+    properties.forEach(p=>{ if(p.id!==excludePropId || i<excludeFromIdx) propLoan += propertyCashFlowAtDate(p, date); });
     standaloneLoans.forEach(l=>{ if(l.committed!==false) propLoan -= standaloneLoanPaymentAtDate(l.id, date); });
     const spending = effectiveSpendingAtDate(date, totalInterest);
     const pool = propLoan + totalInterest - spending;
@@ -3474,29 +3513,22 @@ function fvmBalanceSeries(monthsCount, excludePropId){
   }
   return { balances: result, growth, interestByInv };
 }
-/* Boosts one account's starting balance (a hypothetical lump sum) and optionally excludes a
-   sold property's cash flow from the shared pool, then returns every account's series at once —
-   temporary-mutate-compute-restore, same safe pattern as everywhere else in FVM. */
-function fvmSeriesWithLump(boostInvId, boostAmount, excludePropId, monthsCount){
-  const orig = {};
-  investments.forEach(inv=>{ orig[inv.id] = inv.balance; });
-  try{
-    if(boostInvId && boostAmount){
-      const inv = findInvestment(boostInvId);
-      if(inv) inv.balance = (inv.balance||0) + boostAmount;
-    }
-    return fvmBalanceSeries(monthsCount, excludePropId);
-  } finally {
-    Object.keys(orig).forEach(id=>{ const inv=findInvestment(id); if(inv) inv.balance = orig[id]; });
-  }
+/* Boosts (or drains) one account at a chosen month — today by default — and optionally excludes
+   a sold property's cash flow from the shared pool, then returns every account's series at once.
+   Feeds a boostSpec into fvmBalanceSeries rather than pre-mutating inv.balance, since a future
+   date needs the amount applied mid-walk, not before it. */
+function fvmSeriesWithLump(boostInvId, boostAmount, boostDateStr, excludePropId, monthsCount){
+  const idx = boostDateStr ? Math.max(0, Math.min(monthsCount-1, monthIndexFromToday(parseD(boostDateStr)))) : 0;
+  const boostSpec = (boostInvId && boostAmount) ? { invId: boostInvId, amount: boostAmount, idx } : null;
+  return fvmBalanceSeries(monthsCount, excludePropId, boostSpec, idx);
 }
 function fvmBuildColumns(){
   const f = state.fvm;
   const lump = fvmEffectiveLump();
   const excludeProp = fvmEffectiveExcludeProp();
-  const series = fvmSeriesWithLump(f.selectedCol, lump, excludeProp, FVM_MONTHS);
+  const series = fvmSeriesWithLump(f.selectedCol, lump, f.lumpDate, excludeProp, FVM_MONTHS);
   const cols = investments.filter(i=>i.committed!==false).map(inv=>({
-    id: inv.id, label: displayName(inv), series: series.balances[inv.id], boosted: inv.id===f.selectedCol && lump>0
+    id: inv.id, label: displayName(inv), series: series.balances[inv.id], boosted: inv.id===f.selectedCol && lump!==0
   }));
   const gt = new Array(FVM_MONTHS).fill(0);
   cols.forEach(c=>{ for(let i=0;i<FVM_MONTHS;i++) gt[i]+=c.series[i]; });
@@ -3628,8 +3660,9 @@ function fvmSelectedDetailCard(){
   const inv = findInvestment(f.selectedCol);
   if(!inv) return '';
   const lump = fvmEffectiveLump();
+  const lumpWhen = state.fvm.lumpDate ? fmtMonth(parseD(state.fvm.lumpDate)) : 'today';
   return `
-    ${lump>0 ? `<div style="font-size:12.5px; font-weight:700; color:var(--principal); margin-bottom:10px; background:var(--principal-soft); border-radius:8px; padding:7px 10px;">+ ${fmt$(lump)} hypothetical addition applied here &mdash; this is the account getting it</div>` : ''}
+    ${lump!==0 ? `<div style="font-size:12.5px; font-weight:700; color:${lump>0?'var(--principal)':'var(--interest)'}; margin-bottom:10px; background:${lump>0?'var(--principal-soft)':'var(--interest-soft)'}; border-radius:8px; padding:7px 10px;">${fmtSigned$(lump)} hypothetical ${lump>0?'addition':'withdrawal'} applied ${lumpWhen} &mdash; this is the account getting it</div>` : ''}
     <div class="dim" style="font-size:11px;">Balance</div>
     <div class="big-number" style="margin-top:2px; font-size:22px;">${fmt$(inv.balance)}</div>
     <div class="stat-row" style="margin-top:10px;">
@@ -3648,6 +3681,7 @@ function renderFVM(){
   const firstReal = investments.find(i=>i.committed!==false);
   if(!f.selectedCol && firstReal) f.selectedCol = firstReal.id;
   const totalMonthly = incomeSources().reduce((s,x)=>s+x.amount,0);
+  const lump = fvmEffectiveLump();
   const {cols, gtSeries, growthSeries} = fvmBuildColumns();
   const totalInvBalance = investments.filter(i=>i.committed!==false).reduce((s,i)=>s+(i.balance||0),0);
   const spendingToday = effectiveSpendingAtDate(TODAY);
@@ -3685,7 +3719,7 @@ function renderFVM(){
       <th>Date</th>
       <th>Growth</th>
       <th style="cursor:pointer; ${f.selectedCol==='gt'?'color:var(--accent); text-decoration:underline;':''}" onclick="fvm_selectCol('gt')">Grand Total</th>
-      ${cols.map(c=>`<th style="cursor:pointer; ${c.id===f.selectedCol?'color:var(--accent); text-decoration:underline;':''}" onclick="fvm_selectCol('${c.id}')">${(c.boosted?'+ ':'')+(c.label.length>11?c.label.slice(0,10)+'&hellip;':c.label)}</th>`).join('')}
+      ${cols.map(c=>`<th style="cursor:pointer; ${c.id===f.selectedCol?'color:var(--accent); text-decoration:underline;':''}" onclick="fvm_selectCol('${c.id}')">${(c.boosted?(lump>0?'+ ':'&minus; '):'')+(c.label.length>11?c.label.slice(0,10)+'&hellip;':c.label)}</th>`).join('')}
     </tr></thead>
     <tbody>
     ${Array.from({length:FVM_MONTHS}, (_,i)=>{
