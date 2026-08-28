@@ -338,7 +338,7 @@ function prop_openAdd(){
   properties.push({ id, name:'New Property', type:'Single Family', note:null,
     units:[{label:'Unit 1', beds:null, rent:0}],
     pmPct:10, taxesAnnual:0, insuranceAnnual:0, maintenancePct:0,
-    loans:[] });
+    loans:[{id, label:'Mortgage', original:0, rate:0, term:360, start:mkey(TODAY)+'-01'}] });
   push({type:'loan', id});
   state.propEdit = true; // push() itself resets this to false — must set it after, not before
   render();
@@ -350,6 +350,29 @@ function prop_delete(id){
 }
 function prop_setName(id, val){ const p=findProperty(id); if(p) p.name=val; render(); }
 function prop_setType(id, val){ const p=findProperty(id); if(p) p.type=val; render(); }
+function unit_add(propId){
+  const p = findProperty(propId);
+  if(!p) return;
+  p.units.push({ label:'Unit '+(p.units.length+1), beds:null, rent:0 });
+  render();
+}
+function unit_remove(propId, idx){
+  const p = findProperty(propId);
+  if(!p) return;
+  p.units.splice(idx,1);
+  render();
+}
+/* Generic loan-field editor for a property's own mortgage — loan_set() (below, for standalone
+   loans) only looks in standaloneLoans, so this uses findLoan() instead, which also checks
+   every property's own loans array. Same field semantics either way. */
+function propLoan_set(loanId, field, val){
+  const l = findLoan(loanId);
+  if(!l) return;
+  if(field==='start'){ if(val) l.start = val+'-01'; }
+  else l[field] = Math.max(0, numFrom(val));
+  delete SCHED[loanId]; delete SCHED_INDEX[loanId];
+  render();
+}
 /* ---- Standalone loans (not tied to any property) ---- */
 let _nextStandaloneLoanId = 1;
 function newStandaloneLoanId(){ return 'sl'+(_nextStandaloneLoanId++); }
@@ -675,7 +698,12 @@ function invMultiplierRow(rows, startBalance, multiplier){
 function parseD(s){ const [y,m]=s.split('-').map(Number); return new Date(y,m-1,1); }
 function addM(d,n){ return new Date(d.getFullYear(), d.getMonth()+n, 1); }
 function mkey(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
-function pmtFor(loan){ const r=loan.rate/100/12; return loan.original*r/(1-Math.pow(1+r,-loan.term)); }
+function pmtFor(loan){
+  if(!loan.original || loan.original<=0 || !loan.term || loan.term<=0) return 0;
+  const r=loan.rate/100/12;
+  if(r===0) return loan.original/loan.term; // straight-line — the general formula divides by zero at 0%
+  return loan.original*r/(1-Math.pow(1+r,-loan.term));
+}
 
 function buildSchedule(loan){
   const r = loan.rate/100/12, pmt = pmtFor(loan);
@@ -683,8 +711,11 @@ function buildSchedule(loan){
   const extrasByKey = {};
   (loan.confirmedExtras||[]).forEach(e=>{ const k=mkey(parseD(e.date)); extrasByKey[k]=(extrasByKey[k]||0)+e.amount; });
   let balance = loan.original; const rows=[];
+  // A brand-new $0 draft loan would otherwise produce zero rows (balance starts at/below the
+  // exit threshold), leaving currentRow() with nothing to find and crashing every caller that
+  // assumes a row exists — so the very first period always runs regardless of starting balance.
   for(let k=1;k<=loan.term+3;k++){
-    if(balance<=0.01) break;
+    if(balance<=0.01 && k>1) break;
     const date = addM(start,k-1);
     const interest = balance*r;
     let principal = pmt-interest;
@@ -1321,6 +1352,7 @@ function renderRevenueSection(prop, editing){
   <div class="card">
     ${prop.units.map((u,i)=>unitRow(prop.id, u, i, editing)).join('')}
     <div class="row-line"><span class="l">Gross rent</span><span class="v">${fmt$(gross)}</span></div>
+    ${editing ? `<div style="text-align:right; margin-top:8px;"><span class="link" style="font-size:12px;" onclick="unit_add('${prop.id}')">+ Add unit</span></div>` : ''}
   </div>`;
 }
 function renderCostsSection(prop, editing){
@@ -1346,6 +1378,21 @@ function renderCostsSection(prop, editing){
     `}
     <div class="row-line"><span class="l">Total monthly costs</span><span class="v">${fmt$(costs.total)}</span></div>
     ${!prop.nnn?`<details class="legend-box"><summary class="info-btn">&#9432;</summary><p>Set Taxes and Insurance to however they actually get paid &mdash; yearly, quarterly, or monthly &mdash; and enter that period's amount; it's converted to a monthly cost automatically. The date is just an approximation of when it's last/next due, for your own reference.</p></details>`:''}
+  </div>`;
+}
+/* Editable primary-loan terms — edit-mode only, since the header card's own rate/years-left/
+   payoff-date line already covers this at a glance the rest of the time. Existing properties
+   never needed this (rates don't change without a refinance event), but a newly-added one
+   starts at $0/0%/0mo and needs somewhere to actually set them. */
+function renderLoanFieldsSection(prop){
+  const loan = prop.loans[0];
+  return `
+  <div class="section-label" style="margin-top:18px;">Loan</div>
+  <div class="card">
+    <div class="row-line"><span class="l">Original amount</span><span style="display:flex; align-items:center; gap:6px;"><span class="suffix">$</span><input type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-loan-original',loan.original||'')}" oninput="RAW['in-loan-original']=this.value; propLoan_set('${loan.id}','original',this.value)"/></span></div>
+    <div class="row-line"><span class="l">Rate</span><span style="display:flex; align-items:center; gap:6px;"><input type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-loan-rate',loan.rate||'')}" oninput="RAW['in-loan-rate']=this.value; propLoan_set('${loan.id}','rate',this.value)"/><span class="dim" style="font-size:12.5px;">%</span></span></div>
+    <div class="row-line"><span class="l">Term</span><span style="display:flex; align-items:center; gap:6px;"><input type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-loan-term',loan.term||'')}" oninput="RAW['in-loan-term']=this.value; propLoan_set('${loan.id}','term',this.value)"/><span class="dim" style="font-size:12.5px;">mo</span></span></div>
+    <div class="row-line"><span class="l">Start date</span><input type="month" value="${mkey(parseD(loan.start))}" oninput="propLoan_set('${loan.id}','start',this.value)" style="background:none;border:none;color:var(--text);font-family:var(--font-mono);font-size:14px;font-weight:700;outline:none; text-align:right;"/></div>
   </div>`;
 }
 function renderInterestSection(prop){
@@ -1567,7 +1614,10 @@ function unitRow(propId, u, idx, editing){
     </div>
     <div style="text-align:right; margin-top:4px;"><span class="link" style="color:var(--danger); font-size:11px;" onclick="unitVacancy_delete('${propId}',${idx},'${v.id}')">Remove</span></div>
   </div>`).join('')}
-  <div style="text-align:right; margin:0 0 10px;"><span class="link" style="font-size:11px;" onclick="unitVacancy_add('${propId}',${idx})">+ Mark vacant</span></div>`;
+  <div style="text-align:right; margin:0 0 10px; display:flex; justify-content:flex-end; gap:10px;">
+    <span class="link" style="font-size:11px;" onclick="unitVacancy_add('${propId}',${idx})">+ Mark vacant</span>
+    <span class="link" style="color:var(--danger); font-size:11px;" onclick="unit_remove('${propId}',${idx})">Remove unit</span>
+  </div>`;
 }
 /* ---- Timeline cell click -> jump straight to that item's own detail page, in edit mode,
    scrolled to Revenue — no chooser, same landing spot every time a property cell is clicked. ---- */
@@ -1990,8 +2040,8 @@ function renderLoanDetail(propId){
 
   <div class="card" style="padding:14px 16px;">
     <div style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;">
-      <div style="font-size:18px; font-weight:700;">${displayName(prop)}</div>
-      <div class="dim" style="font-size:11.5px; white-space:nowrap;">${prop.type}</div>
+      ${editing && !prop.isStandaloneLoan ? `<input type="text" value="${prop.name}" oninput="prop_setName('${propId}',this.value)" placeholder="Property name" style="font-size:18px; font-weight:700; background:none; border:none; color:var(--text); font-family:var(--font-ui); outline:none; padding:0; flex:1; min-width:0;"/>` : `<div style="font-size:18px; font-weight:700;">${displayName(prop)}</div>`}
+      ${editing && !prop.isStandaloneLoan ? `<input type="text" value="${prop.type}" oninput="prop_setType('${propId}',this.value)" placeholder="Type" style="font-size:11.5px; background:none; border:none; color:var(--text-dim); font-family:var(--font-ui); outline:none; padding:0; text-align:right; width:100px; flex:0 0 auto;"/>` : `<div class="dim" style="font-size:11.5px; white-space:nowrap;">${prop.type}</div>`}
     </div>
     <div class="big-number" style="margin-top:3px; font-size:27px;">${fmt$(c.balance)}</div>
     <div class="stat-row" style="margin-top:10px;">
@@ -2011,6 +2061,7 @@ function renderLoanDetail(propId){
     </div>
   </div>
 
+  ${!prop.isStandaloneLoan && editing ? renderLoanFieldsSection(prop) : ''}
   ${!prop.isStandaloneLoan ? linkGridRow(prop, propertyCashFlow(prop)) : ''}
   ${!prop.isStandaloneLoan ? renderRevenueSection(prop, editing) : ''}
   ${!prop.isStandaloneLoan ? renderCostsSection(prop, editing) : ''}
@@ -2033,6 +2084,7 @@ function renderLoanDetail(propId){
   </table>
   </div>
   <details class="footnote" style="margin-bottom:6px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Debt vs. ownership visualization &mdash; reserved, not designed yet.</div></details>
+  ${editing && !prop.isStandaloneLoan ? `<div style="text-align:center; margin-top:12px;"><span class="link" style="color:var(--danger); font-size:13px;" onclick="if(confirm('Delete ${prop.name.replace(/'/g,"\\'")}?')) prop_delete('${propId}')">Delete property</span></div>` : ''}
   `;
 }
 
