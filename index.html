@@ -84,6 +84,12 @@ html,body{margin:0; height:100%; overflow:hidden; background:var(--bg);}
 .screen::-webkit-scrollbar{width:0;}
 .header{ display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; min-height:32px;}
 .header-sticky{ display:flex; align-items:center; justify-content:space-between; position:sticky; top:-18px; margin:-18px -18px 16px; padding:16px 18px 12px; background:var(--surface); z-index:15; border-bottom:1px solid var(--border-soft);}
+.tab-header-sticky{ position:sticky; top:-18px; margin:-18px -18px 14px; padding:18px 18px 14px; background:var(--surface); z-index:15; border-bottom:1px solid var(--border-soft);}
+table.amort th:first-child{ position:sticky; left:0; z-index:6;}
+table.amort td:first-child{ position:sticky; left:0; background:var(--surface); z-index:2;}
+table.amort tr.state-current td:first-child{ background:var(--accent-soft);}
+table.amort tr.state-confirmed td:first-child{ background:var(--confirmed-soft);}
+table.amort tr.state-planned td:first-child{ background:var(--planned-soft);}
 .plan-trigger{ justify-self:end; display:flex; align-items:center; gap:6px; background:var(--accent-soft); color:var(--accent); border:none; padding:7px 13px; border-radius:100px; font-size:12.5px; font-weight:700; cursor:pointer; font-family:var(--font-ui); white-space:nowrap;}
 .link-grid{ display:grid; grid-template-columns:1fr 1fr 1fr; margin:14px 0 18px;}
 .link-grid .link{font-size:13px;}
@@ -95,7 +101,7 @@ html,body{margin:0; height:100%; overflow:hidden; background:var(--bg);}
 .amort-window{ max-height:400px; overflow-y:auto; border:1px solid var(--border); border-radius:var(--radius-sm); margin-top:4px;}
 .amort-jump{ display:flex; background:var(--surface-3); border-radius:var(--radius-sm); padding:3px; gap:2px; margin-top:10px;}
 .amort-jump button{ flex:1; border:none; background:none; padding:8px 4px; border-radius:9px; font-size:13px; font-weight:600; color:var(--text-dim); cursor:pointer; font-family:var(--font-ui);}
-.amort-jump button.active{ background:var(--surface); color:var(--text); box-shadow:0 1px 3px rgba(0,0,0,.15);}
+.amort-jump button.active{ background:var(--accent); color:white; box-shadow:0 1px 3px rgba(0,0,0,.15);}
 .header h1{ font-size:22px; margin:0; letter-spacing:-.01em; font-weight:700;}
 .back{ display:flex; align-items:center; gap:4px; color:var(--accent); font-size:15px; font-weight:600; cursor:pointer; background:none; border:none; font-family:var(--font-ui); padding:4px 0;}
 .iconbtn{ width:32px;height:32px;border-radius:10px;background:var(--surface-2);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;color:var(--text-dim);cursor:pointer;}
@@ -360,6 +366,59 @@ function growthShareTargets(){
 function monthIndexFromToday(date){
   return (date.getFullYear()-TODAY.getFullYear())*12 + (date.getMonth()-TODAY.getMonth());
 }
+/* FVM and Income share one "which month am I looking at" value (state.timelineDate) so
+   switching between them, or triggering any re-render by editing something elsewhere,
+   doesn't reset either table back to the top. Each table restores to that month on render,
+   and a scroll listener keeps the shared value in sync with whatever you actually scroll to. */
+/* Marks whichever row a jump button (or the shared scroll-restore) last landed on, so
+   centering it in the window doesn't leave you guessing which of the visible rows is
+   actually the one you jumped to. "Current" (today) keeps its own existing look. */
+function timelineRowClass(i, monthsCap){
+  if(i===0) return 'state-current';
+  const targetIdx = timelineIdxForDate(monthsCap);
+  return (targetIdx!==null && targetIdx===i) ? 'state-planned' : '';
+}
+function timelineIdxForDate(monthsCap){
+  if(!state.timelineDate) return null;
+  const idx = monthIndexFromToday(parseD(state.timelineDate+'-01'));
+  if(idx<0) return 0;
+  if(idx>=monthsCap) return monthsCap-1;
+  return idx;
+}
+function timelineFitHeight(winId){
+  const win = document.getElementById(winId);
+  const screen = document.getElementById('screen');
+  if(!win || !screen) return;
+  const available = screen.getBoundingClientRect().bottom - win.getBoundingClientRect().top - 12;
+  win.style.maxHeight = Math.max(200, available) + 'px';
+}
+/* Centers the target row in the window instead of pinning it near the top, so there's
+   context visible both before and after it — used everywhere a jump button or the
+   shared scroll-restore lands on a specific row. */
+function timelineCenterRow(win, el){
+  if(!win || !el) return;
+  win.scrollTop = el.offsetTop - (win.clientHeight/2) + (el.offsetHeight/2);
+}
+function timelineSyncScroll(winId, rowPrefix, monthsCap){
+  const win = document.getElementById(winId);
+  if(!win) return;
+  timelineFitHeight(winId);
+  const idx = timelineIdxForDate(monthsCap);
+  if(idx!==null){
+    const el = document.getElementById(rowPrefix+idx);
+    timelineCenterRow(win, el);
+  }
+  win.addEventListener('scroll', function(){
+    const row0 = document.getElementById(rowPrefix+'0');
+    const row1 = document.getElementById(rowPrefix+'1');
+    if(!row0 || !row1) return;
+    const rowHeight = row1.offsetTop - row0.offsetTop;
+    if(rowHeight<=0) return;
+    let i = Math.round((win.scrollTop + win.clientHeight/2) / rowHeight);
+    i = Math.max(0, Math.min(monthsCap-1, i));
+    state.timelineDate = mkey(addM(TODAY, i));
+  }, {passive:true});
+}
 function growthShareNonRecursiveInputs(monthsCount){
   const nonGrowthInvs = investments.filter(i=>i.committed!==false && !(i.recurring&&i.recurring.growthShare));
   const propLoanSeries = [];
@@ -377,6 +436,17 @@ function growthShareNonRecursiveInputs(monthsCount){
 function newInvId(){ return 'inv'+(_nextInvId++); }
 function newInvEventId(){ return 'ie'+(_nextInvEventId++); }
 function findInvestment(id){ return investments.find(i=>i.id===id); }
+/* Privacy mode: swaps real names for a stable pseudonym (same property always shows the
+   same letter, so a walkthrough stays coherent) without touching the underlying data at
+   all — flip the toggle back off and everything reads exactly as it did before. */
+function displayName(obj){
+  if(!state.settings.privacyMode || !obj) return obj ? obj.name : '';
+  const pi = properties.indexOf(obj);
+  if(pi>=0) return 'Property '+String.fromCharCode(65+(pi%26));
+  const ii = investments.indexOf(obj);
+  if(ii>=0) return 'Account '+String.fromCharCode(65+(ii%26));
+  return obj.name;
+}
 function invEventSign(type){ return (type==='deposit'||type==='transfer_in') ? 1 : -1; }
 /* Future-dated events (planned or locked-in) aren't reflected in inv.balance yet —
    only past/today events are, since those touch the real balance immediately on entry.
@@ -657,8 +727,8 @@ function standaloneLoanPayment(id){ const r=currentRow(id); return r? r.interest
 function standaloneLoanPaymentAtDate(id, date){ const r=scheduleRowAtDate(id, date); return r? r.interest+r.principal : 0; }
 function incomeSources(){
   const list = [];
-  properties.forEach(p=> list.push({ id:'prop:'+p.id, kind:'property', name:p.name, sub:p.type, amount: propertyCashFlow(p) }));
-  investments.forEach(inv=> { if(inv.committed===false) return; list.push({ id:'inv:'+inv.id, kind:'investment', name:inv.name, sub:inv.isSample?'Investment &middot; sample':'Investment', amount: invMonthlyReturn(inv) }); });
+  properties.forEach(p=> list.push({ id:'prop:'+p.id, kind:'property', name:displayName(p), sub:p.type, amount: propertyCashFlow(p) }));
+  investments.forEach(inv=> { if(inv.committed===false) return; list.push({ id:'inv:'+inv.id, kind:'investment', name:displayName(inv), sub:inv.isSample?'Investment &middot; sample':'Investment', amount: invMonthlyReturn(inv) }); });
   standaloneLoans.forEach(l=> { if(l.committed===false) return; list.push({ id:'loan:'+l.id, kind:'loan', name:l.label, sub:'Loan payment', amount: -standaloneLoanPayment(l.id) }); });
   return list;
 }
@@ -681,15 +751,18 @@ function portfolioYearsLeft(weighted){
 }
 
 /* ============ FORMATTERS ============ */
-const state = { tab:'income', pushed:null, sheet:null, sheetEdit:false, propEdit:false, sort:'balance', sortDir:1,
-  settings:{ showCents:false, weightedYears:true, monthlySpending:9000, spendingPctOfInterest:10 },
+const state = { tab:'fvm', pushed:null, sheet:null, sheetEdit:false, propEdit:false, sort:'balance', sortDir:1,
+  settings:{ showCents:false, weightedYears:true, monthlySpending:9000, spendingPctOfInterest:10, privacyMode:false },
+  settingsOpen:{ general:true, pm:false, defaults:false, rates:false, events:false },
   planner:{}, analyzerSel:{}, azSections:{},
   cas:{ selectedId:'montana2', customBalance:350000, customRate:5.99, customTermYears:27,
     prepay:50000, grossReturn:4.5, taxRate:24, horizonKey:'5', horizonYearsCustom:5,
     ipThreshold:2.0, compareSort:'net' },
-  income:{ sortDir:-1, sortKey:'amount', expanded:false, invEdit:false, invDraft:null, investmentsExpanded:false, propertiesExpanded:true },
-  fvm:{ lump:500000, selectedCol:null, multCursor:-1, yr1Idx:-1, yr5Idx:-1,
-    whatIfOpen:false, saleOpen:false, salePropId:null, salePrice:0, saleCostPct:7, saleTaxPct:20, detailCollapsed:false },
+  income:{ sortDir:-1, sortKey:'amount', expanded:false, invEdit:false, invDraft:null },
+  timelineDate:null, // shared "which month am I looking at" between FVM and Income's timelines
+  yr1Idx:-1, yr5Idx:-1, multCursor:-1, // shared jump-button cursors, same reason
+  fvm:{ lump:500000, selectedCol:null,
+    whatIfOpen:false, saleOpen:false, salePropId:null, salePrice:0, saleCostPct:7, saleTaxPct:20 },
   lastSyncAt:null
 };
 
@@ -794,7 +867,11 @@ const RAW = {};
 function rv(id, fallback){ return RAW[id]!==undefined ? RAW[id] : String(fallback); }
 function goTab(t){ state.tab=t; state.pushed=null; state.sheet=null; state._resetScroll=true; for(const k in RAW) delete RAW[k]; render(); }
 function push(view){ state.pushed=view; state.propEdit=false; state._resetScroll=true; state.azSections={}; for(const k in RAW) delete RAW[k]; render(); }
-function goBack(){ state.pushed=null; state.propEdit=false; state._resetScroll=true; state.azSections={}; for(const k in RAW) delete RAW[k]; render(); }
+function goBack(){
+  state.pushed=null; state.propEdit=false; state._resetScroll=true; state.azSections={}; for(const k in RAW) delete RAW[k];
+  if(state.returnToSheet){ const sheet=state.returnToSheet; state.returnToSheet=null; openSheet(sheet); return; }
+  render();
+}
 function togglePropEdit(){ state.propEdit = !state.propEdit; render(); }
 function backLabel(){ return {income:'Income', portfolio:'Portfolio', analyzer:'Analyzer'}[state.tab] || 'Back'; }
 function openSheet(view){ state.sheet=view; state.sheetEdit=false; state.plannerInfoOpen=false; state.azSections={}; for(const k in RAW) delete RAW[k]; render(); }
@@ -852,6 +929,8 @@ function render(){
   renderTabbar();
   if(state.pushed && state.pushed.type==='loan') requestAnimationFrame(()=>jumpAmort('current', true));
   if(state.pushed && state.pushed.type==='investment') requestAnimationFrame(()=>jumpInvSchedule('current'));
+  if(!state.pushed && state.tab==='fvm') requestAnimationFrame(()=>timelineSyncScroll('fvmWindow','fvmrow-',FVM_MONTHS));
+  if(!state.pushed && state.tab==='income') requestAnimationFrame(()=>timelineSyncScroll('incomeWindow','incomerow-',INCOME_MONTHS_AHEAD));
   saveLocalData();
 }
 function renderTabbar(){
@@ -1002,7 +1081,7 @@ function renderPropCard(prop){
   <div class="prop-card" onclick="push({type:'loan', id:'${prop.id}'})">
     <div class="prop-top">
       <div>
-        <div class="prop-name">${prop.name}</div>
+        <div class="prop-name">${displayName(prop)}</div>
         <div class="prop-sub">${prop.type}</div>
       </div>
       <div style="text-align:right;">
@@ -1346,6 +1425,103 @@ function renderSheet(){
       <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">A scheduled change replaces the normal draw for that date range only &mdash; it automatically goes back to normal the month after it ends. Use this for things like a bigger draw to cover an estimated tax bill.</div></details>
     </div></div>`;
   }
+  if(s.type==='incomeList'){
+    const sortKey = state.income.sortKey||'amount';
+    const sortDir = state.income.sortDir;
+    const sortFn = INCOME_SORTS[sortKey].fn;
+    const allSources = incomeSources().sort((a,b)=>(sortFn(a)-sortFn(b))*sortDir);
+    const sources = s.kind==='properties' ? allSources.filter(x=>x.kind!=='investment') : allSources.filter(x=>x.kind==='investment');
+    const title = s.kind==='properties' ? 'Properties' : 'Investments';
+    return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
+      <div class="sheet-handle"></div>
+      ${sheetHead(title, sources.length+' receivable'+(sources.length===1?'':'s'), false)}
+      <div class="sort-row" style="margin-top:0;">
+        ${Object.entries(INCOME_SORTS).map(([k,v])=>`<div class="chip ${sortKey===k?'active':''}" onclick="setIncomeSort('${k}')">${v.label}${sortKey===k?(sortDir===1?' &uarr;':' &darr;'):''}</div>`).join('')}
+      </div>
+      ${sources.length===0 ? `<div class="dim" style="font-size:13px; margin-top:10px;">Nothing here yet.</div>` : sources.map(src=>incomeSourceCard(src)).join('')}
+    </div></div>`;
+  }
+  if(s.type==='fvmBreakdown'){
+    const date = parseD(s.date);
+    if(s.kind==='total'){
+      const {items, total} = fvmTotalBreakdownAt(s.date);
+      return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
+        <div class="sheet-handle"></div>
+        ${sheetHead('Grand Total', fmtMonth(date), false)}
+        <div class="dim" style="font-size:12px; margin-bottom:8px;">Every investment balance, added together.</div>
+        ${fvmBreakdownRows(items)}
+        <div class="row-line" style="border-top:1px solid var(--border); margin-top:4px; padding-top:10px;"><span class="l" style="font-weight:700; color:var(--text);">Total</span><span class="v" style="font-weight:700;">${fmt$(total)}</span></div>
+      </div></div>`;
+    }
+    if(s.kind==='receivables'){
+      const {receivables, totalReceivables} = fvmGrowthBreakdownAt(s.date);
+      return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
+        <div class="sheet-handle"></div>
+        ${sheetHead('Total', fmtMonth(date), false)}
+        <div class="dim" style="font-size:12px; margin-bottom:8px;">Property cash flow and investment interest, added together.</div>
+        ${fvmBreakdownRows(receivables)}
+        <div class="row-line" style="border-top:1px solid var(--border); margin-top:4px; padding-top:10px;"><span class="l" style="font-weight:700; color:var(--text);">Total</span><span class="v" style="font-weight:700;">${fmt$(totalReceivables)}</span></div>
+      </div></div>`;
+    }
+    if(s.kind==='growth'){
+      const {receivables, totalReceivables, spending, growth} = fvmGrowthBreakdownAt(s.date);
+      return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
+        <div class="sheet-handle"></div>
+        ${sheetHead('Growth', fmtMonth(date), false)}
+        <div class="dim" style="font-size:12px; margin-bottom:8px;">Everything coming in, minus that month's spending draw.</div>
+        ${fvmBreakdownRows(receivables)}
+        <div class="row-line" style="border-top:1px solid var(--border); margin-top:4px; padding-top:10px;"><span class="l">Total receivables</span><span class="v" style="font-weight:700;">${fmt$(totalReceivables)}</span></div>
+        <div class="row-line"><span class="l">Spending draw</span><span class="v" style="color:var(--interest);">${fmtSigned$(-spending)}</span></div>
+        <div class="row-line" style="border-top:1px solid var(--border); margin-top:4px; padding-top:10px;"><span class="l" style="font-weight:700; color:var(--text);">Growth</span><span class="v" style="font-weight:700; color:${growth>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(growth)}</span></div>
+      </div></div>`;
+    }
+    return '';
+  }
+  if(s.type==='fvmWhatIf'){
+    const f = state.fvm;
+    const lump = fvmEffectiveLump();
+    const netProceeds = f.saleOpen ? fvmSaleNetProceeds() : 0;
+    return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
+      <div class="sheet-handle"></div>
+      ${sheetHead('What if I add money?', 'A hypothetical lump sum, previewed against a real account', false)}
+      <div class="settings-row" style="padding-top:0;">
+        <div><div class="l" style="font-size:13.5px;">Active</div><div class="sub">Applies to whichever column you select on the table</div></div>
+        <div class="toggle ${f.whatIfOpen?'on':''}" onclick="fvm_toggleWhatIf()"><div class="knob"></div></div>
+      </div>
+      <div class="seg" style="margin:10px 0;">
+        <button class="${!f.saleOpen?'active':''}" onclick="state.fvm.saleOpen=false; render();">Type an amount</button>
+        <button class="${f.saleOpen?'active':''}" onclick="state.fvm.saleOpen=true; render();">Sell a property</button>
+      </div>
+      ${!f.saleOpen ? `
+      <div class="input-row"><span class="suffix">$</span><input id="in-fvm-lump" type="text" inputmode="decimal" value="${rv('in-fvm-lump',f.lump||'')}" oninput="fvm_setLump(this.value)"/></div>
+      ` : `
+      <div class="dim" style="font-size:11px; margin-bottom:2px;">Which property</div>
+      <select onchange="fvm_setSaleProp(this.value)" style="width:100%; background:var(--surface-3); border:1px solid var(--border); border-radius:10px; padding:9px 11px; color:var(--text); font-family:var(--font-ui); font-size:14px; margin-bottom:8px;">
+        <option value="">Choose one&hellip;</option>
+        ${properties.map(p=>`<option value="${p.id}" ${f.salePropId===p.id?'selected':''}>${p.name}</option>`).join('')}
+      </select>
+      ${f.salePropId ? `
+      <div class="dim" style="font-size:11px; margin:8px 0 2px;">Sale price</div>
+      <div class="input-row"><span class="suffix">$</span><input id="in-fvm-saleprice" type="text" inputmode="decimal" value="${rv('in-fvm-saleprice',f.salePrice||'')}" oninput="fvm_setSalePrice(this.value)"/></div>
+      <div style="display:flex; gap:8px; margin-top:8px;">
+        <div style="flex:1;"><div class="dim" style="font-size:10.5px; margin-bottom:2px;">Selling costs</div><div class="input-row"><input id="in-fvm-salecost" type="text" inputmode="decimal" value="${rv('in-fvm-salecost',f.saleCostPct)}" oninput="fvm_setSaleCostPct(this.value)"/><span class="suffix">%</span></div></div>
+        <div style="flex:1;"><div class="dim" style="font-size:10.5px; margin-bottom:2px;">Est. taxes</div><div class="input-row"><input id="in-fvm-saletax" type="text" inputmode="decimal" value="${rv('in-fvm-saletax',f.saleTaxPct)}" oninput="fvm_setSaleTaxPct(this.value)"/><span class="suffix">%</span></div></div>
+      </div>
+      <div class="dim" style="font-size:10px; margin-top:4px;">Loan payoff is calculated automatically. Taxes are your own estimate, not a real calculation &mdash; check with your accountant.</div>
+      <div class="dim" style="font-size:11px; margin-top:12px;">Net proceeds</div>
+      <div class="mono" style="font-size:19px; font-weight:700;">${fmt$(netProceeds)}</div>
+      ` : ''}
+      `}
+      ${lump>0 ? `<div class="dim" style="font-size:11px; margin-top:12px;">Close this and select a column on the table to preview ${fmt$(lump)} going there${f.saleOpen&&f.salePropId?' &mdash; and that property&rsquo;s cash flow drops out of every column from the sale date on':''}.</div>` : ''}
+    </div></div>`;
+  }
+  if(s.type==='fvmColDetail'){
+    return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
+      <div class="sheet-handle"></div>
+      ${sheetHead(state.fvm.selectedCol==='gt' ? 'Grand Total' : (findInvestment(state.fvm.selectedCol)||{}).name || 'Account', '', false)}
+      ${fvmSelectedDetailCard()}
+    </div></div>`;
+  }
   if(s.type==='growthTarget'){
     const committedInvestments = investments.filter(i=>i.committed!==false);
     return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
@@ -1372,6 +1548,14 @@ function renderSheet(){
       }).join('')}
       `}
       <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Growth (income minus your draw) is split across whichever investments are picked here, recalculated fresh every month. Fixed $ amounts are reserved first; percentages split whatever's left.</div></details>
+      ${(()=>{
+        const {receivables, totalReceivables, spending, growth} = fvmGrowthBreakdownAt(mkey(TODAY)+'-01');
+        return `<div class="section-label" style="margin-top:18px;">How we got here, ${fmtMonth(TODAY)}</div>
+        ${fvmBreakdownRows(receivables)}
+        <div class="row-line" style="border-top:1px solid var(--border); margin-top:4px; padding-top:10px;"><span class="l">Total receivables</span><span class="v" style="font-weight:700;">${fmt$(totalReceivables)}</span></div>
+        <div class="row-line"><span class="l">Spending draw</span><span class="v" style="color:var(--interest);">${fmtSigned$(-spending)}</span></div>
+        <div class="row-line" style="border-top:1px solid var(--border); margin-top:4px; padding-top:10px;"><span class="l" style="font-weight:700; color:var(--text);">Growth</span><span class="v" style="font-weight:700; color:${growth>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(growth)}</span></div>`;
+      })()}
     </div></div>`;
   }
   if(s.type==='analyzerDetail'){
@@ -2510,18 +2694,25 @@ function computeIncomeSeries(months){
 
 function incomeSourceCard(src){
   const color = src.amount>=0 ? 'var(--principal)' : 'var(--interest)';
-  const onclick = src.kind==='property' ? `push({type:'loan', id:'${src.id.slice(5)}'})` : `push({type:'investment', id:'${src.id.slice(4)}'})`;
+  const returnKind = src.kind==='property' ? 'properties' : 'investments';
+  const onclick = src.kind==='property'
+    ? `state.returnToSheet={type:'incomeList', kind:'${returnKind}'}; closeSheet(); push({type:'loan', id:'${src.id.slice(5)}'})`
+    : `state.returnToSheet={type:'incomeList', kind:'${returnKind}'}; closeSheet(); push({type:'investment', id:'${src.id.slice(4)}'})`;
+  const inv = src.kind==='investment' ? findInvestment(src.id.slice(4)) : null;
   return `<div class="prop-card" onclick="${onclick}">
     <div class="prop-top">
       <div><div class="prop-name" style="font-size:15px;">${src.name}</div><div class="prop-sub">${src.sub}</div></div>
-      <div style="text-align:right;"><div class="prop-balance" style="font-size:16px; color:${color};">${fmtSigned$(src.amount)}/mo</div></div>
+      <div style="text-align:right;">
+        <div class="prop-balance" style="font-size:16px; color:${color};">${fmtSigned$(src.amount)}/mo</div>
+        ${inv ? `<div class="dim" style="font-size:11.5px; margin-top:1px;">${fmt$(inv.balance)} total</div>` : ''}
+      </div>
     </div>
   </div>`;
 }
 
 function renderIncomeTimeline(cols, months, series){
   return `
-  <div class="amort-window scrollx" style="max-height:420px;">
+  <div class="amort-window scrollx" id="incomeWindow">
   <table class="amort">
     <thead><tr>
       <th>Date</th>
@@ -2538,7 +2729,7 @@ function renderIncomeTimeline(cols, months, series){
     ${months.map((date,i)=>{
       const rowTotal = series.totals[i];
       const dateKey = mkey(date)+'-01';
-      return `<tr class="${mkey(date)===mkey(TODAY)?'state-current':''}">
+      return `<tr id="incomerow-${i}" class="${timelineRowClass(i, months.length)}">
         <td>${fmtMonth(date)}</td>
         <td style="font-weight:700; color:${rowTotal>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(rowTotal)}</td>
         ${cols.map(c=>{
@@ -2590,44 +2781,37 @@ function renderIncome(){
   const growth = total - spending;
   const propertySources = allSources.filter(s=>s.kind!=='investment');
   const investmentSources = allSources.filter(s=>s.kind==='investment');
-  const invExpanded = state.income.investmentsExpanded;
-  const propExpanded = state.income.propertiesExpanded;
   const committedInvestmentsCount = investments.filter(i=>i.committed!==false).length;
   return `
-  <div class="header"><h1>Income</h1><div style="display:flex; gap:8px;"><div class="iconbtn" onclick="inv_openAdd()">+</div><div class="iconbtn" onclick="push({type:'settings'})">${tabIcon('gear')}</div></div></div>
-  <div class="card">
+  <div class="tab-header-sticky">
+    <div class="header" style="margin-bottom:14px;">
+      <h1>Income</h1>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <details class="footnote" style="margin:0; position:relative;"><summary class="info-btn">&#9432;</summary><div class="footnote-body" style="position:absolute; right:0; top:28px; width:260px; background:var(--surface-3); border:1px solid var(--border); border-radius:12px; padding:12px 14px; z-index:20; font-size:12px; line-height:1.5;">Real estate columns come from each loan's real schedule &mdash; rent and costs assumed to hold steady until you update them. Columns marked ~ are investments, projected at the current rate &mdash; not guaranteed, since markets move. Row for ${fmtMonth(TODAY)} is highlighted as the current month. Showing ${INCOME_MONTHS_AHEAD/12} years out.</div></details>
+        <div class="iconbtn" onclick="inv_openAdd()">+</div>
+        <div class="iconbtn" onclick="push({type:'settings'})">${tabIcon('gear')}</div>
+      </div>
+    </div>
     <div class="stat-row">
-      <div class="stat-pill"><div class="v" style="color:${total>=0?'var(--text)':'var(--interest)'};">${fmt$(total)}</div><div class="l">${fmtMonth(TODAY)}</div></div>
+      <div class="stat-pill" style="cursor:pointer;" onclick="fvm_showBreakdown('receivables','${mkey(TODAY)}-01')"><div class="v" style="color:${total>=0?'var(--text)':'var(--interest)'};">${fmt$(total)}</div><div class="l">${fmtMonth(TODAY)}</div></div>
       <div class="stat-pill" style="cursor:pointer;" onclick="openSheet({type:'incomeAdjust'})"><div class="v">${fmt$(spending)}</div><div class="l">Income &rsaquo;</div></div>
       <div class="stat-pill" style="cursor:pointer;" onclick="openSheet({type:'growthTarget'})"><div class="v" style="color:${growth>=0?'var(--principal)':'var(--interest)'}">${fmtSigned$(growth)}</div><div class="l">Growth &rsaquo;</div></div>
     </div>
     <div class="dim" style="font-size:11.5px; margin-top:10px;">
-      <span class="link" onclick="togglePropertiesExpanded()">${properties.length} propert${properties.length===1?'y':'ies'}</span>
+      <span class="link" onclick="openSheet({type:'incomeList', kind:'properties'})">${properties.length} propert${properties.length===1?'y':'ies'}</span>
       &middot;
-      <span class="link" onclick="toggleInvestmentsExpanded()">${committedInvestmentsCount} investment${committedInvestmentsCount===1?'':'s'}</span>
+      <span class="link" onclick="openSheet({type:'incomeList', kind:'investments'})">${committedInvestmentsCount} investment${committedInvestmentsCount===1?'':'s'}</span>
     </div>
   </div>
 
-  ${(propExpanded || invExpanded) ? `
-  <div class="sort-row" style="margin-top:14px;">
-    ${Object.entries(INCOME_SORTS).map(([k,v])=>`<div class="chip ${sortKey===k?'active':''}" onclick="setIncomeSort('${k}')">${v.label}${sortKey===k?(sortDir===1?' &uarr;':' &darr;'):''}</div>`).join('')}
+  <div class="section-label" style="margin-top:0;">Monthly Timeline</div>
+  <div class="amort-jump" id="incomeJump">
+    <button id="incomejump-yr1" onclick="income_yr1Jump()">1 yr</button>
+    <button id="incomejump-yr5" onclick="income_yr5Jump()">5 yr</button>
+    <button id="incomejump-current" class="active" onclick="incomeJump('current')">Current</button>
   </div>
-  ` : ''}
-
-  ${invExpanded ? `
-  <div class="section-label" style="margin-top:14px;">Investments</div>
-  ${investmentSources.length===0 ? `<div class="dim" style="font-size:13px;">No investments yet.</div>` : investmentSources.map(src=>incomeSourceCard(src)).join('')}
-  ` : ''}
-
-  ${propExpanded ? `
-  ${invExpanded ? `<div class="section-label" style="margin-top:18px;">Properties</div>` : ''}
-  ${propertySources.length===0 ? `<div class="dim" style="font-size:13px; margin-top:10px;">No receivables yet.</div>` : propertySources.map(src=>incomeSourceCard(src)).join('')}
-  ` : ''}
-
-  <div class="section-label" style="margin-top:22px;">Monthly Timeline</div>
   ${renderIncomeTimelineCached(allSources)}
-  <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; margin-top:8px;">
-    <details class="footnote" style="margin:0;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Real estate columns come from each loan's real schedule &mdash; rent and costs assumed to hold steady until you update them. Columns marked ~ are investments, projected at the current rate &mdash; not guaranteed, since markets move. Row for ${fmtMonth(TODAY)} is highlighted as the current month. Showing ${INCOME_MONTHS_AHEAD/12} years out.</div></details>
+  <div style="display:flex; justify-content:flex-end; margin-top:8px;">
     ${allSources.length>5 ? `<span class="link" style="font-size:13px; white-space:nowrap;" onclick="toggleIncomeExpand()">${state.income.expanded?'Show top 5 only':'Expand to show all '+allSources.length+' sources'} &rsaquo;</span>` : ''}
   </div>
   `;
@@ -2709,7 +2893,6 @@ function spendingOverride_setEnd(id, val){ const o=householdSpendingOverrides.fi
 function spendingOverride_setAmount(id, val){ const o=householdSpendingOverrides.find(x=>x.id===id); if(o) o.amount=Math.max(0, numFrom(val)); render(); }
 function spendingOverride_setNote(id, val){ const o=householdSpendingOverrides.find(x=>x.id===id); if(o) o.note=val; render(); }
 function spendingOverride_delete(id){ const idx=householdSpendingOverrides.findIndex(x=>x.id===id); if(idx>=0) householdSpendingOverrides.splice(idx,1); render(); }
-function togglePropertiesExpanded(){ state.income.propertiesExpanded = !state.income.propertiesExpanded; render(); }
 function toggleGrowthTarget(investmentId){
   const inv = findInvestment(investmentId);
   if(inv.recurring && inv.recurring.growthShare){
@@ -2720,8 +2903,6 @@ function toggleGrowthTarget(investmentId){
   }
   render();
 }
-function toggleInvestmentsExpanded(){ state.income.investmentsExpanded = !state.income.investmentsExpanded; render(); }
-
 /* ---- Withdraw / Transfer ---- */
 function inv_openWithdraw(id){
   state.invActionDraft = { amount:0, date:mkey(addM(TODAY,1))+'-01', toId:null };
@@ -3037,73 +3218,94 @@ function renderGoalsPlaceholder(){
 
 /* ============ SETTINGS ============ */
 function toggleSetting(key){ state.settings[key] = !state.settings[key]; render(); }
+const SETTINGS_REF_KEYS = ['pm','defaults','rates','events'];
+function settings_toggleSection(key){ state.settingsOpen[key] = !state.settingsOpen[key]; render(); }
+function settings_toggleAllRef(){
+  const allOpen = SETTINGS_REF_KEYS.every(k=>state.settingsOpen[k]);
+  SETTINGS_REF_KEYS.forEach(k=> state.settingsOpen[k] = !allOpen);
+  render();
+}
+function settingsSection(key, title, bodyHtml){
+  const open = state.settingsOpen[key];
+  return `<div class="az-section">
+    <div class="az-section-head" onclick="settings_toggleSection('${key}')">
+      <span><span class="az-chevron">${open?'&#9662;':'&#9656;'}</span>${title}</span>
+    </div>
+    ${open? `<div class="az-section-body">${bodyHtml}</div>` : ''}
+  </div>`;
+}
 function renderSettings(){
   const s = state.settings;
+  const generalOpen = state.settingsOpen.general;
+  const allRefOpen = SETTINGS_REF_KEYS.every(k=>state.settingsOpen[k]);
   return `
   <div class="header-sticky"><button class="back" onclick="goBack()">&lsaquo; Back</button></div>
   <h1 style="margin-bottom:14px;">Settings</h1>
-  <div class="section-label">Appearance</div>
-  <div class="card">
-    <div class="seg">
-      <button class="${THEME==='dark'?'active':''}" onclick="setTheme('dark')">Dark</button>
-      <button class="${THEME==='light'?'active':''}" onclick="setTheme('light')">Light</button>
-      <button class="${THEME==='system'?'active':''}" onclick="setTheme(null)">System</button>
+
+  <div class="az-section">
+    <div class="az-section-head" onclick="settings_toggleSection('general')">
+      <span><span class="az-chevron">${generalOpen?'&#9662;':'&#9656;'}</span>Appearance &amp; Data</span>
     </div>
-  </div>
-  <div class="section-label">Display</div>
-  <div class="card">
-    <div class="settings-row"><div><div class="l">Show cents</div><div class="sub">Round to whole dollars when off</div></div>
-      <div class="toggle ${s.showCents?'on':''}" onclick="toggleSetting('showCents')"><div class="knob"></div></div></div>
-    <div class="settings-row"><div><div class="l">Balance-weighted avg years left</div><div class="sub">Off = simple average across loans</div></div>
-      <div class="toggle ${s.weightedYears?'on':''}" onclick="toggleSetting('weightedYears')"><div class="knob"></div></div></div>
+    ${generalOpen ? `<div class="az-section-body">
+      <div class="section-label" style="margin-top:14px;">Appearance</div>
+      <div class="seg">
+        <button class="${THEME==='dark'?'active':''}" onclick="setTheme('dark')">Dark</button>
+        <button class="${THEME==='light'?'active':''}" onclick="setTheme('light')">Light</button>
+        <button class="${THEME==='system'?'active':''}" onclick="setTheme(null)">System</button>
+      </div>
+
+      <div class="section-label">Display</div>
+      <div class="settings-row"><div><div class="l">Show cents</div><div class="sub">Round to whole dollars when off</div></div>
+        <div class="toggle ${s.showCents?'on':''}" onclick="toggleSetting('showCents')"><div class="knob"></div></div></div>
+      <div class="settings-row"><div><div class="l">Balance-weighted avg years left</div><div class="sub">Off = simple average across loans</div></div>
+        <div class="toggle ${s.weightedYears?'on':''}" onclick="toggleSetting('weightedYears')"><div class="knob"></div></div></div>
+
+      <div class="section-label">Data</div>
+      <div class="settings-row"><div><div class="l">Show all general data</div><div class="sub">Expand property fees, defaults, rates &amp; events below</div></div>
+        <div class="toggle ${allRefOpen?'on':''}" onclick="settings_toggleAllRef()"><div class="knob"></div></div></div>
+      <div class="settings-row"><div><div class="l">Privacy mode</div><div class="sub">Swaps names for generic labels &mdash; nothing else changes, flip back any time</div></div>
+        <div class="toggle ${s.privacyMode?'on':''}" onclick="toggleSetting('privacyMode')"><div class="knob"></div></div></div>
+      <div class="row-line" style="margin-top:4px;"><span class="l">Last synced</span><span class="v" style="font-family:var(--font-ui); font-weight:600; font-size:13px;">${state.lastSyncAt?fmtDateTime(state.lastSyncAt):'Never'}</span></div>
+      <div class="row-line"><span class="l">Export data (.json)</span><button class="selectchip" onclick="exportData()">Export</button></div>
+      <div class="row-line"><span class="l">Import data (.json)</span><button class="selectchip" onclick="triggerImport()">Import</button></div>
+      <input id="importFileInput" type="file" accept="application/json,.json" style="display:none" onchange="handleImportFile(this)"/>
+      <div class="row-line"><span class="l">Reset to built-in data</span><button class="selectchip" style="color:var(--danger); background:var(--interest-soft);" onclick="resetLocalData()">Reset</button></div>
+      <details class="footnote" style="margin-top:8px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Everything you enter is saved on this device automatically, and that saved copy is what loads every time &mdash; including ahead of any update to the app itself, so a new property or feature can be invisible here until you reset. Export creates a file you can send to someone else (or save to a shared folder like iCloud Drive) &mdash; they Import it into their own copy to get your numbers. Reset clears what's saved on this device and reloads the app's built-in data instead &mdash; use it after an update, or Export first if you want to keep your changes. Nothing is ever uploaded anywhere on its own.</div></details>
+    </div>` : ''}
   </div>
 
-  <div class="section-label">Property management fees</div>
-  <div class="card">
+  ${settingsSection('pm', 'Property management fees', `
     ${properties.filter(p=>!p.nnn).map(p=>`
     <div class="row-line">
-      <span class="l">${p.name}${p.pmPctAssumed?' <span class="faint">&middot; assumed</span>':''}</span>
+      <span class="l">${displayName(p)}${p.pmPctAssumed?' <span class="faint">&middot; assumed</span>':''}</span>
       <span style="display:flex; align-items:center; gap:6px;">
         <input id="in-pm-${p.id}" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-pm-'+p.id,p.pmPct)}" oninput="RAW['in-pm-${p.id}']=this.value; pm_set('${p.id}',this.value)"/>
         <span class="dim" style="font-size:12.5px;">%</span>
       </span>
     </div>`).join('')}
     <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Locked in per management contract &mdash; only change this when the contract itself changes, not for routine cost updates.</div></details>
-  </div>
+  `)}
 
-  <div class="section-label">Defaults for new analysis</div>
-  <div class="card">
+  ${settingsSection('defaults', 'Defaults for new analysis', `
     <div class="row-line"><span class="l">PM fee</span><span class="v">10%</span></div>
     <div class="row-line"><span class="l">Maintenance</span><span class="v">1.0%/yr</span></div>
     <div class="row-line"><span class="l">Default loan term</span><span class="v">30 yrs</span></div>
     <div class="row-line"><span class="l">Default down payment</span><span class="v">25%</span></div>
     <div class="row-line"><span class="l">Default closing costs</span><span class="v">$9,000</span></div>
-  </div>
+  `)}
 
-  <div class="section-label">Interest rates</div>
-  <div class="card">
+  ${settingsSection('rates', 'Interest rates', `
     <div class="row-line"><span class="l">Source</span><span class="v" style="font-family:var(--font-ui); font-weight:600;">Manual entry</span></div>
     <div class="row-line"><span class="l">Default analyzer rate</span><span class="v">6.75%</span></div>
     <div class="row-line"><span class="l">Last updated</span><span class="v" style="font-family:var(--font-ui); font-weight:600;">Jul 2026</span></div>
-  </div>
+  `)}
 
-  <div class="section-label">Structural events</div>
-  <div class="card">
-    <div class="row-line"><span class="l">123 Example &mdash; refinanced</span><span class="v" style="font-family:var(--font-ui); font-weight:600;">Jan 2024</span></div>
-    <div class="row-line"><span class="l">456 Sample Ave &mdash; loan added</span><span class="v" style="font-family:var(--font-ui); font-weight:600;">Jun 2024</span></div>
-    <div class="row-line"><span class="l">999 Test Commercial Way &mdash; 2 lump payments</span><span class="v" style="font-family:var(--font-ui); font-weight:600;">Mar '22, Feb '23</span></div>
+  ${settingsSection('events', 'Structural events', `
+    <div class="row-line"><span class="l">${displayName(findProperty('montana'))} &mdash; refinanced</span><span class="v" style="font-family:var(--font-ui); font-weight:600;">Jan 2024</span></div>
+    <div class="row-line"><span class="l">${displayName(findProperty('barney'))} &mdash; loan added</span><span class="v" style="font-family:var(--font-ui); font-weight:600;">Jun 2024</span></div>
+    <div class="row-line"><span class="l">${displayName(findProperty('gallatin'))} &mdash; 2 lump payments</span><span class="v" style="font-family:var(--font-ui); font-weight:600;">Mar '22, Feb '23</span></div>
     <div style="text-align:right; margin-top:8px;"><span class="link" style="font-size:13px;">Full event log &rsaquo;</span></div>
-  </div>
-
-  <div class="section-label">Data</div>
-  <div class="card">
-    <div class="row-line"><span class="l">Last synced</span><span class="v" style="font-family:var(--font-ui); font-weight:600; font-size:13px;">${state.lastSyncAt?fmtDateTime(state.lastSyncAt):'Never'}</span></div>
-    <div class="row-line"><span class="l">Export data (.json)</span><button class="selectchip" onclick="exportData()">Export</button></div>
-    <div class="row-line"><span class="l">Import data (.json)</span><button class="selectchip" onclick="triggerImport()">Import</button></div>
-    <input id="importFileInput" type="file" accept="application/json,.json" style="display:none" onchange="handleImportFile(this)"/>
-    <div class="row-line"><span class="l">Reset to built-in data</span><button class="selectchip" style="color:var(--danger); background:var(--interest-soft);" onclick="resetLocalData()">Reset</button></div>
-  </div>
-  <details class="footnote" style="margin-bottom:6px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Everything you enter is saved on this device automatically, and that saved copy is what loads every time &mdash; including ahead of any update to the app itself, so a new property or feature can be invisible here until you reset. Export creates a file you can send to someone else (or save to a shared folder like iCloud Drive) &mdash; they Import it into their own copy to get your numbers. Reset clears what's saved on this device and reloads the app's built-in data instead &mdash; use it after an update, or Export first if you want to keep your changes. Nothing is ever uploaded anywhere on its own.</div></details>
+  `)}
   `;
 }
 
@@ -3155,6 +3357,7 @@ function fvmBalanceSeries(monthsCount, excludePropId){
   const targetIds = new Set(targets.map(t=>t.id));
   const bals = {}; invs.forEach(inv=> bals[inv.id] = inv.balance||0);
   const result = {}; invs.forEach(inv=> result[inv.id] = new Array(monthsCount));
+  const interestByInv = {}; invs.forEach(inv=> interestByInv[inv.id] = new Array(monthsCount));
   const growth = new Array(monthsCount); // total receivables minus spending draw, unclamped — same figure as Income's "Growth" stat, every month
   for(let i=0;i<monthsCount;i++){
     const date = addM(TODAY, i);
@@ -3169,8 +3372,13 @@ function fvmBalanceSeries(monthsCount, excludePropId){
       });
       targets.forEach(t=>{ (t.events||[]).forEach(e=>{ if(mkey(parseD(e.date))===mkey(date)) bals[t.id]+=invEventSign(e.type)*e.amount; }); });
     }
-    const nonGrowthInterest = invs.filter(inv=>!targetIds.has(inv.id)).reduce((s,inv)=> s+bals[inv.id]*(inv.rate||0)/100/12, 0);
-    const targetsInterest = targets.reduce((s,t)=> s+bals[t.id]*(t.rate||0)/100/12, 0);
+    // Captured here, on the balance carried in before this month's growth-share allocation —
+    // this is the exact figure that feeds "growth" below, so anything explaining growth
+    // (like the breakdown sheets) must read interestByInv, not reconstruct it from the
+    // balances array, which reflects the *post*-allocation state instead.
+    invs.forEach(inv=>{ interestByInv[inv.id][i] = bals[inv.id]*(inv.rate||0)/100/12; });
+    const nonGrowthInterest = invs.filter(inv=>!targetIds.has(inv.id)).reduce((s,inv)=> s+interestByInv[inv.id][i], 0);
+    const targetsInterest = targets.reduce((s,t)=> s+interestByInv[t.id][i], 0);
     const totalInterest = nonGrowthInterest + targetsInterest;
     let propLoan = 0;
     properties.forEach(p=>{ if(p.id!==excludePropId) propLoan += propertyCashFlowAtDate(p, date); });
@@ -3199,7 +3407,7 @@ function fvmBalanceSeries(monthsCount, excludePropId){
       bals[inv.id] += bals[inv.id]*(inv.rate||0)/100/12;
     });
   }
-  return { balances: result, growth };
+  return { balances: result, growth, interestByInv };
 }
 /* Boosts one account's starting balance (a hypothetical lump sum) and optionally excludes a
    sold property's cash flow from the shared pool, then returns every account's series at once —
@@ -3223,53 +3431,100 @@ function fvmBuildColumns(){
   const excludeProp = fvmEffectiveExcludeProp();
   const series = fvmSeriesWithLump(f.selectedCol, lump, excludeProp, FVM_MONTHS);
   const cols = investments.filter(i=>i.committed!==false).map(inv=>({
-    id: inv.id, label: inv.name, series: series.balances[inv.id], boosted: inv.id===f.selectedCol && lump>0
+    id: inv.id, label: displayName(inv), series: series.balances[inv.id], boosted: inv.id===f.selectedCol && lump>0
   }));
   const gt = new Array(FVM_MONTHS).fill(0);
   cols.forEach(c=>{ for(let i=0;i<FVM_MONTHS;i++) gt[i]+=c.series[i]; });
   return { cols, gtSeries: gt, growthSeries: series.growth };
 }
-function fvm_selectCol(id){ state.fvm.selectedCol = id; state.fvm.multCursor = -1; render(); requestAnimationFrame(()=>fvmJump('current')); }
+/* "How did we get this number" breakdowns — reused from FVM's table cells, FVM/Income's
+   shared header stats, and appended to the existing Growth sheet. Total/Growth breakdowns
+   both work for any date, not just today, so a future table cell can explain itself too. */
+function fvmTotalBreakdownAt(dateStr){
+  const idx = Math.max(0, Math.min(FVM_MONTHS-1, monthIndexFromToday(parseD(dateStr))));
+  const {cols} = fvmBuildColumns();
+  const items = cols.map(c=>({name:c.label, amount: c.series[idx]}));
+  const total = items.reduce((s,x)=>s+x.amount,0);
+  return {items, total};
+}
+function fvmGrowthBreakdownAt(dateStr){
+  const date = parseD(dateStr);
+  const idx = Math.max(0, monthIndexFromToday(date));
+  // Use fvmBalanceSeries's own interestByInv directly, not invMonthlyReturnAtDate (which routes
+  // growth-share investments through a separate, older joint-walk) and not the balances array
+  // (which reflects the state *after* that month's allocation — growth itself is computed from
+  // the balance carried in *before* it). Same figures the table itself used, not a reconstruction.
+  const { interestByInv } = fvmBalanceSeries(idx+1);
+  const propItems = properties.map(p=>({name:p.name, amount: propertyCashFlowAtDate(p, date)}));
+  const loanItems = standaloneLoans.filter(l=>l.committed!==false).map(l=>({name:l.label||'Loan', amount: -standaloneLoanPaymentAtDate(l.id, date)}));
+  const invItems = investments.filter(i=>i.committed!==false).map(i=>({name:i.name, amount: interestByInv[i.id] ? interestByInv[i.id][idx] : 0}));
+  const receivables = [...propItems, ...loanItems, ...invItems];
+  const totalReceivables = receivables.reduce((s,x)=>s+x.amount,0);
+  const investmentInterest = invItems.reduce((s,x)=>s+x.amount,0);
+  const spending = effectiveSpendingAtDate(date, investmentInterest);
+  return { receivables, totalReceivables, spending, growth: totalReceivables-spending };
+}
+function fvmBreakdownRows(items){
+  return items.filter(x=>Math.abs(x.amount)>0.5).map(x=>`<div class="row-line"><span class="l">${x.name}</span><span class="v" style="color:${x.amount>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(x.amount)}</span></div>`).join('');
+}
+function fvm_showBreakdown(kind, dateStr){ openSheet({type:'fvmBreakdown', kind, date:dateStr}); }
+function fvm_selectCol(id){ state.fvm.selectedCol = id; state.multCursor = -1; openSheet({type:'fvmColDetail'}); }
 function fvmActiveSeries(){
   const {cols, gtSeries} = fvmBuildColumns();
   if(state.fvm.selectedCol==='gt') return gtSeries;
   const col = cols.find(c=>c.id===state.fvm.selectedCol);
   return col ? col.series : gtSeries;
 }
-function fvmClearJumpButtons(){ document.querySelectorAll('#fvmJump button').forEach(b=>b.classList.remove('active')); }
-function fvmScrollTo(idx){
-  const win = document.getElementById('fvmWindow');
-  const el = document.getElementById('fvmrow-'+idx);
-  if(win && el){ win.scrollTop = el.offsetTop - 34; }
+/* Shared by FVM and Income's timeline nav — same cursors (state.yr1Idx etc.), so
+   stepping forward on one and switching tabs continues the same cycle on the other,
+   matching the shared scroll position they already keep in sync. */
+function timelineClearJumpButtons(barId){ document.querySelectorAll('#'+barId+' button').forEach(b=>b.classList.remove('active')); }
+function timelineScrollTo(winId, rowPrefix, idx){
+  const win = document.getElementById(winId);
+  const el = document.getElementById(rowPrefix+idx);
+  timelineCenterRow(win, el);
+  state.timelineDate = mkey(addM(TODAY, idx));
+  // Jump buttons deliberately skip the full render() (it would also reset scroll on the
+  // amort window) so the highlight has to be applied by hand here, mirroring the jump
+  // bar's own imperative active-state updates just below each call site.
+  if(win){
+    const prev = win.querySelector('.state-planned');
+    if(prev) prev.classList.remove('state-planned');
+    if(el && idx!==0) el.classList.add('state-planned');
+  }
 }
-function fvmJump(target){
-  const f = state.fvm;
-  if(target==='beginning' || target==='current'){ fvmScrollTo(0); f.multCursor=-1; f.yr1Idx=-1; f.yr5Idx=-1; }
-  if(target==='end'){ fvmScrollTo(FVM_MONTHS-1); }
-  fvmClearJumpButtons();
-  const btn = document.getElementById('fvmjump-'+target);
+function timelineJump(winId, rowPrefix, monthsCap, barId, btnPrefix, target){
+  if(target==='beginning' || target==='current'){ timelineScrollTo(winId, rowPrefix, 0); state.multCursor=-1; state.yr1Idx=-1; state.yr5Idx=-1; }
+  if(target==='end'){ timelineScrollTo(winId, rowPrefix, monthsCap-1); }
+  timelineClearJumpButtons(barId);
+  const btn = document.getElementById(btnPrefix+target);
   if(btn) btn.classList.add('active');
 }
-function fvm_yr1Jump(){
-  const f = state.fvm;
-  f.yr1Idx = (f.yr1Idx+1) % FVM_1YR_STEPS.length;
-  f.yr5Idx = -1; f.multCursor = -1;
-  const years = FVM_1YR_STEPS[f.yr1Idx];
-  fvmScrollTo(Math.min(FVM_MONTHS-1, years*12));
-  fvmClearJumpButtons();
-  const btn = document.getElementById('fvmjump-yr1');
+function timelineYr1Jump(winId, rowPrefix, monthsCap, barId, btnPrefix){
+  state.yr1Idx = (state.yr1Idx+1) % FVM_1YR_STEPS.length;
+  state.yr5Idx = -1; state.multCursor = -1;
+  const years = FVM_1YR_STEPS[state.yr1Idx];
+  timelineScrollTo(winId, rowPrefix, Math.min(monthsCap-1, years*12));
+  timelineClearJumpButtons(barId);
+  const btn = document.getElementById(btnPrefix+'yr1');
   if(btn){ btn.classList.add('active'); btn.textContent = years+' yr'; }
 }
-function fvm_yr5Jump(){
-  const f = state.fvm;
-  f.yr5Idx = (f.yr5Idx+1) % FVM_5YR_STEPS.length;
-  f.yr1Idx = -1; f.multCursor = -1;
-  const years = FVM_5YR_STEPS[f.yr5Idx];
-  fvmScrollTo(Math.min(FVM_MONTHS-1, years*12));
-  fvmClearJumpButtons();
-  const btn = document.getElementById('fvmjump-yr5');
+function timelineYr5Jump(winId, rowPrefix, monthsCap, barId, btnPrefix){
+  state.yr5Idx = (state.yr5Idx+1) % FVM_5YR_STEPS.length;
+  state.yr1Idx = -1; state.multCursor = -1;
+  const years = FVM_5YR_STEPS[state.yr5Idx];
+  timelineScrollTo(winId, rowPrefix, Math.min(monthsCap-1, years*12));
+  timelineClearJumpButtons(barId);
+  const btn = document.getElementById(btnPrefix+'yr5');
   if(btn){ btn.classList.add('active'); btn.textContent = years+' yr'; }
 }
+function fvmScrollTo(idx){ timelineScrollTo('fvmWindow','fvmrow-',idx); }
+function fvmJump(target){ timelineJump('fvmWindow','fvmrow-',FVM_MONTHS,'fvmJump','fvmjump-',target); }
+function fvm_yr1Jump(){ timelineYr1Jump('fvmWindow','fvmrow-',FVM_MONTHS,'fvmJump','fvmjump-'); }
+function fvm_yr5Jump(){ timelineYr5Jump('fvmWindow','fvmrow-',FVM_MONTHS,'fvmJump','fvmjump-'); }
+function income_yr1Jump(){ timelineYr1Jump('incomeWindow','incomerow-',INCOME_MONTHS_AHEAD,'incomeJump','incomejump-'); }
+function income_yr5Jump(){ timelineYr5Jump('incomeWindow','incomerow-',INCOME_MONTHS_AHEAD,'incomeJump','incomejump-'); }
+function incomeJump(target){ timelineJump('incomeWindow','incomerow-',INCOME_MONTHS_AHEAD,'incomeJump','incomejump-',target); }
 /* Growing accounts cycle through 2x/4x/8x... (when does this double, quadruple).
    Accounts on their way down instead cycle through -2x/-4x/-8x (when does this
    halve, quarter, eighth) plus a final stop for hitting $0, if it gets there —
@@ -3289,46 +3544,28 @@ function fvmMultiplierPoints(series){
   return pts;
 }
 function fvm_multiplierJump(){
-  const f = state.fvm;
   const series = fvmActiveSeries();
   const mults = fvmMultiplierPoints(series);
   if(!mults.length) return;
-  f.multCursor = (f.multCursor+1) % mults.length;
-  f.yr1Idx = -1; f.yr5Idx = -1;
-  const target = mults[f.multCursor];
+  state.multCursor = (state.multCursor+1) % mults.length;
+  state.yr1Idx = -1; state.yr5Idx = -1;
+  const target = mults[state.multCursor];
   fvmScrollTo(target.idx);
-  fvmClearJumpButtons();
+  timelineClearJumpButtons('fvmJump');
   const btn = document.getElementById('fvmjump-mult');
   if(btn){ btn.classList.add('active'); btn.textContent = target.label; }
 }
-function fvm_toggleDetail(){ state.fvm.detailCollapsed = !state.fvm.detailCollapsed; render(); }
 function fvmSelectedDetailCard(){
   const f = state.fvm;
-  const chevron = `<span class="dim" style="font-size:11px; transform:${f.detailCollapsed?'rotate(-90deg)':'rotate(0)'}; display:inline-block; transition:transform .15s;">&#9660;</span>`;
   if(f.selectedCol==='gt'){
-    return `<div class="card" style="margin-top:12px; cursor:pointer;" onclick="fvm_toggleDetail()">
-      <div style="display:flex; justify-content:space-between; align-items:center;"><div style="font-size:15px; font-weight:700;">Grand Total</div>${chevron}</div>
-      ${f.detailCollapsed ? '' : `<div class="dim" style="font-size:12px; margin-top:3px;">Every investment balance added together &mdash; the liquid, sellable part of your net worth. Doesn't include property value, since that's latent until sold.</div>`}
-    </div>`;
+    return `<div class="dim" style="font-size:12.5px;">Every investment balance added together &mdash; the liquid, sellable part of your net worth. Doesn't include property value, since that's latent until sold.</div>`;
   }
   const inv = findInvestment(f.selectedCol);
   if(!inv) return '';
   const lump = fvmEffectiveLump();
-  if(f.detailCollapsed){
-    return `<div class="card" style="margin-top:12px; padding:14px 16px; cursor:pointer;" onclick="fvm_toggleDetail()">
-      <div style="display:flex; justify-content:space-between; align-items:center;">
-        <div style="font-size:15px; font-weight:700;">${inv.name}${inv.isSample?' <span class="faint" style="font-weight:600; font-size:11.5px;">(sample)</span>':''} <span class="dim" style="font-weight:600; font-size:13px;">&middot; ${fmt$(inv.balance)}</span></div>
-        ${chevron}
-      </div>
-    </div>`;
-  }
-  return `<div class="card" style="margin-top:12px; padding:14px 16px;">
-    <div style="display:flex; justify-content:space-between; align-items:center; cursor:pointer;" onclick="fvm_toggleDetail()">
-      <div style="font-size:15px; font-weight:700;">${inv.name}${inv.isSample?' <span class="faint" style="font-weight:600; font-size:11.5px;">(sample)</span>':''}</div>
-      ${chevron}
-    </div>
-    ${lump>0 ? `<div style="font-size:12.5px; font-weight:700; color:var(--principal); margin-top:6px; background:var(--principal-soft); border-radius:8px; padding:7px 10px;">+ ${fmt$(lump)} hypothetical addition applied here &mdash; this is the account getting it</div>` : ''}
-    <div class="dim" style="font-size:11px; margin-top:6px;">Balance</div>
+  return `
+    ${lump>0 ? `<div style="font-size:12.5px; font-weight:700; color:var(--principal); margin-bottom:10px; background:var(--principal-soft); border-radius:8px; padding:7px 10px;">+ ${fmt$(lump)} hypothetical addition applied here &mdash; this is the account getting it</div>` : ''}
+    <div class="dim" style="font-size:11px;">Balance</div>
     <div class="big-number" style="margin-top:2px; font-size:22px;">${fmt$(inv.balance)}</div>
     <div class="stat-row" style="margin-top:10px;">
       <div class="stat-pill"><div class="v" style="color:var(--forgone); font-size:14px;">${fmtPct(inv.rate)}</div><div class="l">Rate (APY)</div></div>
@@ -3338,8 +3575,8 @@ function fvmSelectedDetailCard(){
       ? `<div class="dim" style="font-size:11px; margin-top:10px; color:var(--principal);">Growth share: ${inv.recurring.growthShare.mode==='pct'?inv.recurring.growthShare.value+'%':fmt$(inv.recurring.growthShare.value)}${inv.recurring.note?' &middot; '+inv.recurring.note:''}</div>`
       : `<div class="dim" style="font-size:11px; margin-top:10px; color:${inv.recurring.direction==='debit'?'var(--interest)':'var(--principal)'};">${inv.recurring.direction==='debit'?'&minus;':'+'}${fmt$(inv.recurring.amount)}/mo recurring${inv.recurring.note?' &middot; '+inv.recurring.note:''}</div>`
     ) : ''}
-    <div style="text-align:right; margin-top:8px;"><span class="link" style="font-size:12.5px;" onclick="push({type:'investment', id:'${inv.id}'})">Edit this account &rsaquo;</span></div>
-  </div>`;
+    <div style="text-align:right; margin-top:8px;"><span class="link" style="font-size:12.5px;" onclick="state.returnToSheet={type:'fvmColDetail'}; closeSheet(); push({type:'investment', id:'${inv.id}'})">Edit this account &rsaquo;</span></div>
+  `;
 }
 function renderFVM(){
   const f = state.fvm;
@@ -3350,55 +3587,28 @@ function renderFVM(){
   const totalInvBalance = investments.filter(i=>i.committed!==false).reduce((s,i)=>s+(i.balance||0),0);
   const spendingToday = effectiveSpendingAtDate(TODAY);
   const growthToday = totalMonthly - spendingToday;
-  const lump = fvmEffectiveLump();
-  const netProceeds = f.saleOpen ? fvmSaleNetProceeds() : 0;
-  const eligibleProps = properties;
 
   return `
-  <div class="header"><h1>FVM</h1></div>
-  <div class="dim" style="font-size:12.5px; margin:-6px 0 14px;">Real accounts, real growth-share rules &mdash; the whole household in one timeline.</div>
-
-  <div class="stat-row">
-    <div class="stat-pill"><div class="v" style="color:${totalMonthly>=0?'var(--text)':'var(--interest)'};">${fmt$(totalMonthly)}</div><div class="l">${fmtMonth(TODAY)}</div></div>
-    <div class="stat-pill" style="cursor:pointer;" onclick="openSheet({type:'incomeAdjust'})"><div class="v">${fmt$(spendingToday)}</div><div class="l">Income &rsaquo;</div></div>
-    <div class="stat-pill" style="cursor:pointer;" onclick="openSheet({type:'growthTarget'})"><div class="v" style="color:${growthToday>=0?'var(--principal)':'var(--interest)'}">${fmtSigned$(growthToday)}</div><div class="l">Growth &rsaquo;</div></div>
-  </div>
-  <div class="dim" style="font-size:11.5px; margin-top:10px;">Grand Total today: <b class="mono" style="color:var(--text); font-weight:700;">${fmt$(totalInvBalance)}</b></div>
-
-  <details class="legend-box" style="margin-top:12px;" ${f.whatIfOpen?'open':''}>
-    <summary class="info-btn" style="width:auto; height:auto; border-radius:12px; padding:9px 13px; display:flex; align-items:center; gap:6px; font-family:var(--font-ui); font-size:13px; font-weight:600; color:var(--text-dim);" onclick="event.preventDefault(); fvm_toggleWhatIf();">${f.whatIfOpen?'&minus;':'+'} What if I add money?</summary>
-    <div style="margin-top:10px;">
-      <div class="seg" style="margin-bottom:10px;">
-        <button class="${!f.saleOpen?'active':''}" onclick="state.fvm.saleOpen=false; render();">Type an amount</button>
-        <button class="${f.saleOpen?'active':''}" onclick="state.fvm.saleOpen=true; render();">Sell a property</button>
+  <div class="tab-header-sticky">
+    <div class="header" style="margin-bottom:14px;">
+      <h1>FVM</h1>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <details class="footnote" style="margin:0; position:relative;"><summary class="info-btn">&#9432;</summary><div class="footnote-body" style="position:absolute; right:0; top:28px; width:260px; background:var(--surface-3); border:1px solid var(--border); border-radius:12px; padding:12px 14px; z-index:20; font-size:12px; line-height:1.5;">Growth is what's left each month after spending &mdash; the same number driving Grand Total's climb. Tap a column to select it, then use &times; to jump to when <i>it</i> doubles, quadruples, and so on. Grand Total is every investment added together, not property value.</div></details>
+        <div class="iconbtn" onclick="push({type:'settings'})">${tabIcon('gear')}</div>
       </div>
-      ${!f.saleOpen ? `
-      <div class="input-row"><span class="suffix">$</span><input id="in-fvm-lump" type="text" inputmode="decimal" value="${rv('in-fvm-lump',f.lump||'')}" oninput="fvm_setLump(this.value)"/></div>
-      ` : `
-      <div class="dim" style="font-size:11px; margin-bottom:2px;">Which property</div>
-      <select onchange="fvm_setSaleProp(this.value)" style="width:100%; background:var(--surface-3); border:1px solid var(--border); border-radius:10px; padding:9px 11px; color:var(--text); font-family:var(--font-ui); font-size:14px; margin-bottom:8px;">
-        <option value="">Choose one&hellip;</option>
-        ${eligibleProps.map(p=>`<option value="${p.id}" ${f.salePropId===p.id?'selected':''}>${p.name}</option>`).join('')}
-      </select>
-      ${f.salePropId ? `
-      <div class="dim" style="font-size:11px; margin:8px 0 2px;">Sale price</div>
-      <div class="input-row"><span class="suffix">$</span><input id="in-fvm-saleprice" type="text" inputmode="decimal" value="${rv('in-fvm-saleprice',f.salePrice||'')}" oninput="fvm_setSalePrice(this.value)"/></div>
-      <div style="display:flex; gap:8px; margin-top:8px;">
-        <div style="flex:1;"><div class="dim" style="font-size:10.5px; margin-bottom:2px;">Selling costs</div><div class="input-row"><input id="in-fvm-salecost" type="text" inputmode="decimal" value="${rv('in-fvm-salecost',f.saleCostPct)}" oninput="fvm_setSaleCostPct(this.value)"/><span class="suffix">%</span></div></div>
-        <div style="flex:1;"><div class="dim" style="font-size:10.5px; margin-bottom:2px;">Est. taxes</div><div class="input-row"><input id="in-fvm-saletax" type="text" inputmode="decimal" value="${rv('in-fvm-saletax',f.saleTaxPct)}" oninput="fvm_setSaleTaxPct(this.value)"/><span class="suffix">%</span></div></div>
-      </div>
-      <div class="dim" style="font-size:10px; margin-top:4px;">Loan payoff is calculated automatically. Taxes are your own estimate, not a real calculation &mdash; check with your accountant.</div>
-      <div class="dim" style="font-size:11px; margin-top:12px;">Net proceeds</div>
-      <div class="mono" style="font-size:19px; font-weight:700;">${fmt$(netProceeds)}</div>
-      ` : ''}
-      `}
-      ${lump>0 ? `<div class="dim" style="font-size:11px; margin-top:12px;">Select a column below to preview ${fmt$(lump)} going there${f.saleOpen&&f.salePropId?' &mdash; and that property&rsquo;s cash flow drops out of every column from the sale date on':''}.</div>` : ''}
     </div>
-  </details>
+    <div class="stat-row">
+      <div class="stat-pill" style="cursor:pointer;" onclick="fvm_showBreakdown('receivables','${mkey(TODAY)}-01')"><div class="v" style="color:${totalMonthly>=0?'var(--text)':'var(--interest)'};">${fmt$(totalMonthly)}</div><div class="l">${fmtMonth(TODAY)}</div></div>
+      <div class="stat-pill" style="cursor:pointer;" onclick="openSheet({type:'incomeAdjust'})"><div class="v">${fmt$(spendingToday)}</div><div class="l">Income &rsaquo;</div></div>
+      <div class="stat-pill" style="cursor:pointer;" onclick="openSheet({type:'growthTarget'})"><div class="v" style="color:${growthToday>=0?'var(--principal)':'var(--interest)'}">${fmtSigned$(growthToday)}</div><div class="l">Growth &rsaquo;</div></div>
+    </div>
+    <div class="dim" style="font-size:11.5px; margin-top:10px;">
+      Grand Total today: <b class="mono" style="color:var(--accent); font-weight:700; cursor:pointer;" onclick="fvm_showBreakdown('total','${mkey(TODAY)}-01')">${fmt$(totalInvBalance)}</b>
+      &middot; <span class="link" onclick="openSheet({type:'fvmWhatIf'})">What if I add money</span>
+    </div>
+  </div>
 
-  ${fvmSelectedDetailCard()}
-
-  <div class="amort-jump" id="fvmJump" style="margin-top:14px;">
+  <div class="amort-jump" id="fvmJump">
     <button id="fvmjump-yr1" onclick="fvm_yr1Jump()">1 yr</button>
     <button id="fvmjump-yr5" onclick="fvm_yr5Jump()">5 yr</button>
     <button id="fvmjump-mult" onclick="fvm_multiplierJump()">2&times;</button>
@@ -3415,19 +3625,18 @@ function renderFVM(){
     <tbody>
     ${Array.from({length:FVM_MONTHS}, (_,i)=>{
       const date = addM(TODAY, i);
+      const dateStr = mkey(date)+'-01';
       const g = growthSeries[i];
-      return `<tr id="fvmrow-${i}" class="${i===0?'state-current':''}">
+      return `<tr id="fvmrow-${i}" class="${timelineRowClass(i, FVM_MONTHS)}">
         <td>${fmtMonth(date)}</td>
-        <td style="color:${g>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(g)}</td>
-        <td style="${f.selectedCol==='gt'?'font-weight:700; color:var(--principal);':''}">${fmt$(gtSeries[i])}</td>
-        ${cols.map(c=>`<td style="${c.id===f.selectedCol?'font-weight:700; color:var(--principal);':''}">${fmt$(c.series[i])}</td>`).join('')}
+        <td style="cursor:pointer; color:${g>=0?'var(--principal)':'var(--interest)'};" onclick="fvm_showBreakdown('growth','${dateStr}')">${fmtSigned$(g)}</td>
+        <td style="cursor:pointer; ${f.selectedCol==='gt'?'font-weight:700; color:var(--principal);':''}" onclick="fvm_showBreakdown('total','${dateStr}')">${fmt$(gtSeries[i])}</td>
+        ${cols.map(c=>`<td style="cursor:pointer; ${c.id===f.selectedCol?'font-weight:700; color:var(--principal);':''}" onclick="inv_openCellAction('${c.id}','${dateStr}')">${fmt$(c.series[i])}</td>`).join('')}
       </tr>`;
     }).join('')}
     </tbody>
   </table>
   </div>
-
-  <div class="footnote">Growth is what's left each month after spending &mdash; the same number driving Grand Total's climb. Tap a column to select it &mdash; the card above shows that account's own details, and 2&times;/4&times;/8&times; cycles to when <i>it</i> crosses each multiple. 1yr and 5yr step forward and wrap back around. Grand Total is every investment added together, not property value.</div>
   `;
 }
 
