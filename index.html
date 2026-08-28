@@ -875,6 +875,43 @@ function portfolioBreakdownRows(kind){
   });
 }
 function portfolio_showBreakdown(kind){ openSheet({type:'portfolioBreakdown', kind}); }
+/* ============ OPPORTUNITY RANKING ============
+   Every loan and every investment, ranked by one honest number: the loan's own rate
+   (a guaranteed return from paying it down) or the investment's own rate (its current,
+   not-guaranteed return) — no invented risk/liquidity weighting on top, since that would
+   look more precise than it actually is. I/P and balance are shown per row as context,
+   not blended into the score, so urgency stays visible without being disguised as math. */
+function opportunityCandidates(){
+  const loans = [];
+  properties.forEach(p=>{
+    if(p.loans[0]){
+      const row = currentRow(p.loans[0].id);
+      loans.push({ kind:'loan', id:p.loans[0].id, name:displayName(p), rate:p.loans[0].rate||0, balance:row.balance, ip: row.principal>0?row.interest/row.principal:0 });
+    }
+    (p.otherLoans||[]).forEach(l=>{
+      const row = currentRow(l.id);
+      loans.push({ kind:'loan', id:l.id, name:displayName(findProperty(l.id)), rate:l.rate||0, balance:row.balance, ip: row.principal>0?row.interest/row.principal:0 });
+    });
+  });
+  standaloneLoans.forEach(l=>{
+    if(l.committed===false) return;
+    const row = currentRow(l.id);
+    loans.push({ kind:'loan', id:l.id, name:displayName(findProperty(l.id)), rate:l.rate||0, balance:row.balance, ip: row.principal>0?row.interest/row.principal:0 });
+  });
+  const invs = investments.filter(i=>i.committed!==false);
+  const bestInvRate = invs.length ? Math.max(...invs.map(i=>i.rate||0)) : 0;
+  const investmentRows = invs.map(inv=>({ kind:'investment', id:inv.id, name:displayName(inv), rate:inv.rate||0, balance:inv.balance||0, underperform:(inv.rate||0) < bestInvRate-2 }));
+  const ranked = [...loans, ...investmentRows].sort((a,b)=>b.rate-a.rate);
+  const losingProps = properties.filter(p=>propertyCashFlow(p)<-0.5).map(p=>({ kind:'property', id:p.id, name:displayName(p), cashFlow:propertyCashFlow(p) }));
+  return { ranked, losingProps };
+}
+function opportunity_show(){ openSheet({type:'opportunityRanking'}); }
+function fvm_previewSale(propId){
+  state.pushed=null; state.tab='fvm';
+  state.fvm.whatIfOpen=true; state.fvm.saleOpen=true; state.fvm.salePropId=propId;
+  render();
+  openSheet({type:'fvmWhatIf'});
+}
 function portfolioTotals(){
   let balance=0, interest=0, principal=0;
   properties.forEach(p=>{ allLoansOf(p).forEach(l=>{ const row=currentRow(l.id); balance+=row.balance; interest+=row.interest; principal+=row.principal; }); });
@@ -1126,9 +1163,8 @@ function renderPortfolio(){
     </div>
     <div class="dim" style="font-size:11.5px; margin-top:11px;">${properties.length} propert${properties.length===1?'y':'ies'} &middot; ${properties.reduce((s,p)=>s+allLoansOf(p).length,0)} loan${properties.reduce((s,p)=>s+allLoansOf(p).length,0)===1?'':'s'} &middot; ${fmtYears(yrs)} ${state.settings.weightedYears?'balance-weighted':'unweighted'} avg left</div>
   </div>
-  <div style="text-align:right; margin:10px 0 0; display:flex; flex-direction:column; gap:4px;">
-    <span class="link" style="font-size:13px;" onclick="push({type:'allocate'})">Where should the cash go? &rsaquo;</span>
-    <span class="link" style="font-size:13px;" onclick="push({type:'prepay'})">Pay down debt or invest? &rsaquo;</span>
+  <div style="text-align:right; margin:10px 0 0;">
+    <span class="link" style="font-size:13px;" onclick="opportunity_show()">Best use of the next dollar &rsaquo;</span>
   </div>
   <div class="sort-row">
     ${Object.entries(SORTS).map(([k,v])=>`<div class="chip ${state.sort===k?'active':''}" onclick="setSort('${k}')">${v.label}${state.sort===k?(state.sortDir===1?' &uarr;':' &darr;'):''}</div>`).join('')}
@@ -1268,6 +1304,19 @@ function renderPL(){
     <div class="dim" style="font-size:11.5px;">Net &mdash; money in minus money out</div>
     <div class="big-number" style="margin-top:2px; font-size:22px; color:${t.net>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(t.net)}</div>
   </div>
+
+  ${(()=>{ const {ranked} = opportunityCandidates(); const top = ranked[0];
+    return `
+    <div class="section-label" style="margin-top:18px;">Best Use of the Next Dollar</div>
+    <div class="card" style="cursor:pointer;" onclick="opportunity_show()">
+      ${top ? `
+      <div class="dim" style="font-size:12.5px;">${top.kind==='loan'?'Pay down':'Add to'}</div>
+      <div class="big-number" style="margin-top:2px; font-size:22px;">${top.name}</div>
+      <div class="dim" style="font-size:11.5px; margin-top:4px;">${fmtPct(top.rate)} ${top.kind==='loan'?'guaranteed return':'current rate'} &mdash; the best of everything ranked</div>
+      ` : `<div class="dim" style="font-size:13px;">No loans or investments to rank yet.</div>`}
+      <div style="text-align:right; margin-top:8px;"><span class="link" style="font-size:12.5px;">See full ranking &rsaquo;</span></div>
+    </div>`;
+  })()}
   `;
 }
 function otherLoanEntries(){
@@ -1748,6 +1797,35 @@ function renderSheet(){
       ${sheetHead(PL_TITLES[category]||category, fmtMonth(TODAY), false)}
       ${rowsHtml}
       <div class="row-line" style="border-top:1px solid var(--border); margin-top:4px; padding-top:10px;"><span class="l" style="font-weight:700; color:var(--text);">Total</span><span class="v" style="font-weight:700;">${fmt$(t[category]||0)}</span></div>
+    </div></div>`;
+  }
+  if(s.type==='opportunityRanking'){
+    const { ranked, losingProps } = opportunityCandidates();
+    const rowsHtml = ranked.map((c,i)=>{
+      const isLoan = c.kind==='loan';
+      const action = isLoan ? 'Pay down' : 'Add to';
+      const detail = isLoan ? `${fmtRatio(c.ip)} I/P &middot; ${fmt$(c.balance)} balance` : `${fmt$(c.balance)} balance`;
+      const flag = c.underperform ? `<div class="dim" style="font-size:11px; color:var(--danger); margin-top:2px;">Well below your other accounts &mdash; worth asking why it's still here</div>` : '';
+      const onclick = isLoan ? `closeSheet(); push({type:'loan', id:'${c.id}'})` : `closeSheet(); push({type:'investment', id:'${c.id}'})`;
+      return `<div class="list-card" onclick="${onclick}">
+        <div class="prop-top">
+          <div><div class="prop-name" style="font-size:14px;">${i+1}. ${c.name}</div><div class="prop-sub">${action} &middot; ${detail}</div></div>
+          <div style="text-align:right;"><div class="prop-balance" style="font-size:15px;">${fmtPct(c.rate)}</div></div>
+        </div>
+        ${flag}
+      </div>`;
+    }).join('');
+    const losingHtml = losingProps.map(p=>`<div class="list-card" onclick="closeSheet(); fvm_previewSale('${p.id}')">
+      <div class="prop-top">
+        <div><div class="prop-name" style="font-size:14px;">${p.name}</div><div class="prop-sub">Losing ${fmtSigned$(p.cashFlow)}/mo</div></div>
+        <span class="link" style="font-size:12px;">Preview selling &rsaquo;</span>
+      </div>
+    </div>`).join('');
+    return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet full">
+      ${sheetHead('Best Use of the Next Dollar', 'Ranked by real, guaranteed-or-current rate', false)}
+      ${ranked.length===0 ? `<div class="dim" style="font-size:13px;">No loans or investments to rank yet.</div>` : rowsHtml}
+      ${losingProps.length ? `<div class="section-label" style="margin-top:18px; color:var(--danger);">Losing money monthly</div>${losingHtml}` : ''}
+      <details class="footnote" style="margin-top:14px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Paying down a loan is a guaranteed return equal to its rate. Adding to an investment earns its current rate &mdash; not guaranteed, since markets move. Ranked together by that number alone, no tax/liquidity/risk adjustment beyond what's already real in each rate. Want the detailed month-by-month payoff math for a specific loan instead? <span class="link" onclick="closeSheet(); push({type:'prepay'})">Open Pay Down Debt or Invest &rsaquo;</span></div></details>
     </div></div>`;
   }
   if(s.type==='netWorthBreakdown'){
