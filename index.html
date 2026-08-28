@@ -790,6 +790,7 @@ function portfolioYearsLeft(weighted){
 const state = { tab:'fvm', pushed:null, sheet:null, sheetEdit:false, propEdit:false, sort:'balance', sortDir:1,
   settings:{ showCents:false, weightedYears:true, monthlySpending:9000, spendingPctOfInterest:10, privacyMode:false },
   settingsOpen:{ general:true, pm:false, defaults:false, rates:false, events:false },
+  portfolioAnalyzerOpen:false,
   planner:{}, analyzerSel:{}, azSections:{},
   cas:{ selectedId:'montana2', customBalance:350000, customRate:5.99, customTermYears:27,
     prepay:50000, grossReturn:4.5, taxRate:24, horizonKey:'5', horizonYearsCustom:5,
@@ -909,7 +910,7 @@ function goBack(){
   render();
 }
 function togglePropEdit(){ state.propEdit = !state.propEdit; render(); }
-function backLabel(){ return {income:'Income', portfolio:'Portfolio', analyzer:'Analyzer'}[state.tab] || 'Back'; }
+function backLabel(){ return {income:'Income', portfolio:'Portfolio', pl:'P&L'}[state.tab] || 'Back'; }
 function openSheet(view){ state.sheet=view; state.sheetEdit=false; state.plannerInfoOpen=false; state.azSections={}; for(const k in RAW) delete RAW[k]; render(); }
 function togglePlannerInfo(){ state.plannerInfoOpen=!state.plannerInfoOpen; render(); }
 function closeSheet(){ state.sheet=null; state.azSections={}; for(const k in RAW) delete RAW[k]; render(); }
@@ -932,7 +933,7 @@ function render(){
     tabbar.style.display='flex';
     if(state.tab==='portfolio') html = renderPortfolio();
     if(state.tab==='income') html = renderIncome();
-    if(state.tab==='analyzer') html = renderAnalyzerLibrary();
+    if(state.tab==='pl') html = renderPL();
     if(state.tab==='fvm') html = renderFVM();
     /* 'goals' tab temporarily removed from the tabbar per user request — renderGoalsPlaceholder() left intact below for easy restore */
   }
@@ -973,7 +974,7 @@ function render(){
 function renderTabbar(){
   const tabbar=document.getElementById('tabbar');
   if(state.pushed){ tabbar.innerHTML=''; return; }
-  const tabs=[['fvm','flag','FVM'],['income','coin','Income'],['portfolio','home','Portfolio'],['analyzer','chart','Analyzer']];
+  const tabs=[['fvm','flag','FVM'],['income','coin','Income'],['portfolio','home','Portfolio'],['pl','chart','P&amp;L']];
   tabbar.innerHTML = tabs.map(([id,icon,label])=>
     `<button class="tabbtn ${state.tab===id?'active':''}" onclick="goTab('${id}')">${tabIcon(icon)}<span>${label}</span></button>`
   ).join('');
@@ -1051,7 +1052,112 @@ function renderPortfolio(){
     </div>`;
   }).join('')}
   <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Remodel notes are already counted in the total balance and portfolio I/P above, shown here since they're personal notes, not separate properties. Personal loans are not tied to any property and are not included in the portfolio balance/I/P above &mdash; they show as a cost on the Income page instead.</div></details>
+
+  <div class="section-label" style="margin-top:22px;">Scenarios</div>
+  <div class="az-section">
+    <div class="az-section-head" onclick="portfolio_toggleAnalyzer()">
+      <span><span class="az-chevron">${state.portfolioAnalyzerOpen?'&#9662;':'&#9656;'}</span>Analyzer</span>
+      <span class="az-section-summary">${analyzerSamples.filter(p=>p.committed!==false).length} scenario${analyzerSamples.filter(p=>p.committed!==false).length===1?'':'s'}</span>
+    </div>
+    ${state.portfolioAnalyzerOpen ? `<div class="az-section-body">${renderAnalyzerLibrary()}</div>` : ''}
+  </div>
   <div style="height:6px;"></div>
+  `;
+}
+function portfolio_toggleAnalyzer(){ state.portfolioAnalyzerOpen = !state.portfolioAnalyzerOpen; render(); }
+/* ============ P&L (money in / money out, by category) ============
+   Same underlying numbers as everywhere else (propertyCosts, invMonthlyReturn, currentRow) —
+   just regrouped by category instead of by property/account. Net is built to equal exactly
+   what Income/FVM already show as the monthly total, so this page explains that number
+   rather than introducing a second, possibly-different one. */
+function plCategoryTotals(){
+  let rent=0, lease=0, invReturn=0;
+  let mortgageInterest=0, mortgagePrincipal=0, otherLoanPmt=0, pmFees=0, taxes=0, insurance=0, maintenance=0, customCosts=0;
+  properties.forEach(p=>{
+    const rev = propertyRevenue(p);
+    if(p.nnn) lease += rev; else rent += rev;
+    const primary = p.loans[0];
+    if(primary){
+      const row = currentRow(primary.id);
+      mortgageInterest += row.interest;
+      mortgagePrincipal += row.principal;
+    }
+    const c = propertyCosts(p);
+    otherLoanPmt += c.otherPmt;
+    pmFees += c.pm;
+    taxes += c.taxes;
+    insurance += c.insurance;
+    maintenance += c.maintenance;
+    customCosts += c.custom;
+  });
+  investments.filter(i=>i.committed!==false).forEach(inv=>{ invReturn += invMonthlyReturn(inv); });
+  standaloneLoans.filter(l=>l.committed!==false).forEach(l=>{ otherLoanPmt += standaloneLoanPayment(l.id); });
+  const moneyIn = rent+lease+invReturn;
+  const moneyOut = mortgageInterest+mortgagePrincipal+otherLoanPmt+pmFees+taxes+insurance+maintenance+customCosts;
+  return { rent, lease, invReturn, moneyIn, mortgageInterest, mortgagePrincipal, otherLoanPmt, pmFees, taxes, insurance, maintenance, customCosts, moneyOut, net: moneyIn-moneyOut };
+}
+function plBreakdownRows(category){
+  switch(category){
+    case 'rent': return properties.filter(p=>!p.nnn).map(p=>({name:displayName(p), amount:propertyRevenue(p)}));
+    case 'lease': return properties.filter(p=>p.nnn).map(p=>({name:displayName(p), amount:propertyRevenue(p)}));
+    case 'invReturn': return investments.filter(i=>i.committed!==false).map(i=>({name:displayName(i), amount:invMonthlyReturn(i)}));
+    case 'mortgageInterest': return properties.filter(p=>p.loans[0]).map(p=>({name:displayName(p), amount:currentRow(p.loans[0].id).interest}));
+    case 'mortgagePrincipal': return properties.filter(p=>p.loans[0]).map(p=>({name:displayName(p), amount:currentRow(p.loans[0].id).principal}));
+    case 'otherLoanPmt': {
+      const rows = [];
+      properties.forEach(p=>(p.otherLoans||[]).forEach(l=>{ const r=currentRow(l.id); rows.push({name:displayName(findProperty(l.id)), amount:r.interest+r.principal}); }));
+      standaloneLoans.filter(l=>l.committed!==false).forEach(l=>{ const r=currentRow(l.id); rows.push({name:displayName(findProperty(l.id)), amount:r.interest+r.principal}); });
+      return rows;
+    }
+    case 'pmFees': return properties.map(p=>({name:displayName(p), amount:propertyCosts(p).pm}));
+    case 'taxes': return properties.map(p=>({name:displayName(p), amount:propertyCosts(p).taxes}));
+    case 'insurance': return properties.map(p=>({name:displayName(p), amount:propertyCosts(p).insurance}));
+    case 'maintenance': return properties.map(p=>({name:displayName(p), amount:propertyCosts(p).maintenance}));
+    case 'customCosts': return properties.map(p=>({name:displayName(p), amount:propertyCosts(p).custom}));
+    default: return [];
+  }
+}
+function pl_showBreakdown(category){ openSheet({type:'plBreakdown', category}); }
+const PL_TITLES = { rent:'Rent', lease:'Lease Income', invReturn:'Investment Returns', mortgageInterest:'Mortgage Interest',
+  mortgagePrincipal:'Mortgage Principal', otherLoanPmt:'Other Loan Payments', pmFees:'Property Management',
+  taxes:'Property Taxes', insurance:'Insurance', maintenance:'Maintenance', customCosts:'Other Costs' };
+function renderPL(){
+  const t = plCategoryTotals();
+  const row = (label, key, color) => t[key]>0.5 ? `<div class="row-line" style="cursor:pointer;" onclick="pl_showBreakdown('${key}')"><span class="l">${label}</span><span class="v" style="color:${color};">${fmt$(t[key])}</span></div>` : '';
+  return `
+  <div class="header"><h1>P&amp;L</h1><div class="iconbtn" onclick="push({type:'settings'})">${tabIcon('gear')}</div></div>
+  <div class="card">
+    <div class="dim" style="font-size:12.5px;">Net cash flow &mdash; ${fmtMonth(TODAY)}</div>
+    <div class="big-number" style="margin-top:4px; color:${t.net>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(t.net)}</div>
+    <div class="dim" style="font-size:11.5px; margin-top:6px;">Everything coming in, minus everything going out &mdash; the same number as Income's total.</div>
+  </div>
+
+  <div class="section-label" style="margin-top:18px;">Money In</div>
+  <div class="card">
+    ${row('Rent', 'rent', 'var(--principal)')}
+    ${row('Lease income', 'lease', 'var(--principal)')}
+    ${row('Investment returns', 'invReturn', 'var(--principal)')}
+    <div class="row-line" style="border-top:1px solid var(--border); margin-top:4px; padding-top:10px;"><span class="l" style="font-weight:700; color:var(--text);">Total Money In</span><span class="v" style="font-weight:700; color:var(--principal);">${fmt$(t.moneyIn)}</span></div>
+  </div>
+
+  <div class="section-label" style="margin-top:18px;">Money Out</div>
+  <div class="card">
+    ${row('Mortgage interest', 'mortgageInterest', 'var(--interest)')}
+    ${row('Mortgage principal', 'mortgagePrincipal', 'var(--text-dim)')}
+    ${row('Other loan payments', 'otherLoanPmt', 'var(--interest)')}
+    ${row('Property management', 'pmFees', 'var(--interest)')}
+    ${row('Property taxes', 'taxes', 'var(--interest)')}
+    ${row('Insurance', 'insurance', 'var(--interest)')}
+    ${row('Maintenance', 'maintenance', 'var(--interest)')}
+    ${row('Other costs', 'customCosts', 'var(--interest)')}
+    <div class="row-line" style="border-top:1px solid var(--border); margin-top:4px; padding-top:10px;"><span class="l" style="font-weight:700; color:var(--text);">Total Money Out</span><span class="v" style="font-weight:700; color:var(--interest);">${fmt$(t.moneyOut)}</span></div>
+  </div>
+  <details class="footnote" style="margin-top:10px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Mortgage principal isn't a real loss &mdash; it's cash leaving the account but building equity in the property, unlike every other line here. It's included so Net matches the total shown everywhere else in the app, but it's worth mentally setting aside when judging whether you're actually losing money each month.</div></details>
+
+  <div class="card" style="margin-top:14px; text-align:center;">
+    <div class="dim" style="font-size:11.5px;">Net &mdash; money in minus money out</div>
+    <div class="big-number" style="margin-top:2px; font-size:22px; color:${t.net>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(t.net)}</div>
+  </div>
   `;
 }
 function otherLoanEntries(){
@@ -1482,6 +1588,20 @@ function renderSheet(){
         ${Object.entries(INCOME_SORTS).map(([k,v])=>`<div class="chip ${sortKey===k?'active':''}" onclick="setIncomeSort('${k}')">${v.label}${sortKey===k?(sortDir===1?' &uarr;':' &darr;'):''}</div>`).join('')}
       </div>
       ${sources.length===0 ? `<div class="dim" style="font-size:13px; margin-top:10px;">Nothing here yet.</div>` : sources.map(src=>incomeSourceCard(src)).join('')}
+    </div></div>`;
+  }
+  if(s.type==='plBreakdown'){
+    const category = s.category;
+    const t = plCategoryTotals();
+    const isIncome = ['rent','lease','invReturn'].includes(category);
+    const color = category==='mortgagePrincipal' ? 'var(--text-dim)' : isIncome ? 'var(--principal)' : 'var(--interest)';
+    const rows = plBreakdownRows(category).filter(r=>Math.abs(r.amount)>0.5);
+    const rowsHtml = rows.length ? rows.map(r=>`<div class="row-line"><span class="l">${r.name}</span><span class="v" style="color:${color};">${fmt$(r.amount)}</span></div>`).join('') : `<div class="dim" style="font-size:12.5px;">Nothing to show.</div>`;
+    return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
+      <div class="sheet-handle"></div>
+      ${sheetHead(PL_TITLES[category]||category, fmtMonth(TODAY), false)}
+      ${rowsHtml}
+      <div class="row-line" style="border-top:1px solid var(--border); margin-top:4px; padding-top:10px;"><span class="l" style="font-weight:700; color:var(--text);">Total</span><span class="v" style="font-weight:700;">${fmt$(t[category]||0)}</span></div>
     </div></div>`;
   }
   if(s.type==='portfolioBreakdown'){
@@ -2101,8 +2221,7 @@ function az_scheduleRows(p, c){
 function renderAnalyzerLibrary(){
   const visible = analyzerSamples.filter(p=>p.committed!==false);
   return `
-  <div class="header"><h1>Analyzer</h1><div style="display:flex; gap:8px;"><div class="iconbtn" onclick="az_openAddChoice()">+</div><div class="iconbtn" onclick="push({type:'settings'})">${tabIcon('gear')}</div></div></div>
-  ${visible.length===0? `<div class="dim" style="font-size:13px; margin-top:20px;">No entries yet &mdash; tap + to add one.</div>` : ''}
+  ${visible.length===0? `<div class="dim" style="font-size:13px;">No entries yet &mdash; tap + Add to start one.</div>` : ''}
   ${visible.map(p=>{
     if((p.kind||'property')==='investment'){
       const c = analyzerInvCalc(p);
@@ -2131,7 +2250,8 @@ function renderAnalyzerLibrary(){
       </div>
     </div>`;
   }).join('')}
-  <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Tap + to add a property or an investment scenario &mdash; just a name and a starting number to begin. Add more detail once you're in.</div></details>
+  <div style="text-align:right; margin-top:10px;"><span class="link" style="font-size:13px;" onclick="az_openAddChoice()">+ Add scenario</span></div>
+  <details class="footnote" style="margin-top:8px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Add a property or an investment scenario &mdash; just a name and a starting number to begin. Add more detail once you're in.</div></details>
   `;
 }
 function az_openAddChoice(){ openSheet({type:'analyzerAddChoice'}); }
