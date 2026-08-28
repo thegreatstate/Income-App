@@ -157,6 +157,7 @@ table.amort tr.state-planned td:first-child{ background:var(--planned-soft);}
 .overlay{ position:absolute; inset:0; background:rgba(0,0,0,.5); display:flex; align-items:flex-end; z-index:20; animation:fadein .15s ease; pointer-events:auto;}
 @keyframes fadein{from{opacity:0}to{opacity:1}}
 .sheet{ background:var(--surface); border-radius:26px 26px 0 0; border:1px solid var(--border); width:100%; max-height:88%; overflow-y:auto; padding:16px 18px 26px; animation:slideup .18s ease;}
+.sheet.full{ max-height:100%; height:100%; border-radius:0; padding-top:calc(env(safe-area-inset-top) + 16px);}
 @keyframes slideup{from{transform:translateY(24px);opacity:0}to{transform:translateY(0);opacity:1}}
 .sheet-handle{width:36px;height:4px;background:var(--border);border-radius:4px;margin:0 auto 14px;}
 .sheet-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;}
@@ -1610,8 +1611,7 @@ function renderSheet(){
     const allSources = incomeSources().sort((a,b)=>(sortFn(a)-sortFn(b))*sortDir);
     const sources = s.kind==='properties' ? allSources.filter(x=>x.kind!=='investment') : allSources.filter(x=>x.kind==='investment');
     const title = s.kind==='properties' ? 'Properties' : 'Investments';
-    return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
-      <div class="sheet-handle"></div>
+    return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet full">
       ${sheetHead(title, sources.length+' receivable'+(sources.length===1?'':'s'), false)}
       <div class="sort-row" style="margin-top:0;">
         ${Object.entries(INCOME_SORTS).map(([k,v])=>`<div class="chip ${sortKey===k?'active':''}" onclick="setIncomeSort('${k}')">${v.label}${sortKey===k?(sortDir===1?' &uarr;':' &darr;'):''}</div>`).join('')}
