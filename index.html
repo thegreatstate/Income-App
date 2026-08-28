@@ -357,6 +357,7 @@ function prop_setType(id, val){ const p=findProperty(id); if(p) p.type=val; rend
    partial number than a silently wrong one built on a guess. */
 function prop_setPurchasePrice(id, v){ const p=findProperty(id); if(p) p.purchasePrice = numFrom(v)||null; render(); }
 function prop_setEstimatedValue(id, v){ const p=findProperty(id); if(p){ p.estimatedValue = numFrom(v)||null; p.estimatedValueDate = mkey(TODAY)+'-01'; } render(); }
+function prop_undoSold(id){ const p=findProperty(id); if(p) p.soldDate = null; render(); }
 function prop_setTaxIncomeSource(id, src){ const p=findProperty(id); if(p) p.taxIncomeSource = src; render(); }
 function prop_setTaxableBaseline(id, v){ RAW['in-prop-taxbaseline-'+id]=v; const p=findProperty(id); if(p) p.taxableIncomeBaseline = numFrom(v); render(); }
 function prop_setEstDepreciation(id, v){ RAW['in-prop-deprec-'+id]=v; const p=findProperty(id); if(p) p.estDepreciationAnnual = numFrom(v); render(); }
@@ -509,6 +510,7 @@ function investmentTaxTreatment(inv){ return inv.taxTreatment || 'ordinary'; }
    same number for a rental, and using cash flow as a stand-in (the old approach) both
    over-counts principal as an expense and ignores depreciation entirely. */
 function propertyTaxableIncomeAtDate(prop, date){
+  if(prop.soldDate && date >= parseD(prop.soldDate)) return 0;
   if((prop.taxIncomeSource||'estimate')==='actual') return prop.taxableIncomeBaseline||0;
   const gross = propertyRevenueAtDate(prop, date);
   const primary = prop.loans[0];
@@ -572,6 +574,10 @@ function timelineRowClass(i, monthsCap){
   const targetIdx = timelineIdxForDate(monthsCap);
   return (targetIdx!==null && targetIdx===i) ? 'state-planned' : '';
 }
+/* Lets tapping a row's own date pin the highlight there directly, the same look the
+   2x jump leaves behind — without moving the scroll position, since the row you tapped
+   is already on screen. */
+function timelineHighlightDate(dateKeyMonth){ state.timelineDate = dateKeyMonth; render(); }
 function timelineIdxForDate(monthsCap){
   if(!state.timelineDate) return null;
   const idx = monthIndexFromToday(parseD(state.timelineDate+'-01'));
@@ -928,6 +934,7 @@ function propertyCosts(prop){
 }
 function propertyCashFlow(prop){ return propertyRevenue(prop) - propertyCosts(prop).total; }
 function propertyCashFlowAtDate(prop, date){
+  if(prop.soldDate && date >= parseD(prop.soldDate)) return 0;
   const primary = prop.loans[0];
   const prow = primary ? scheduleRowAtDate(primary.id, date) : null;
   const pmt = prow ? prow.interest+prow.principal : 0;
@@ -1568,8 +1575,15 @@ function renderLoanFieldsSection(prop){
 }
 function renderValueSection(prop, editing){
   const value = propertyValue(prop);
-  if(!editing && value==null) return '';
-  return `
+  const soldBanner = prop.soldDate ? `
+  <div class="section-label" style="margin-top:18px;">Sold</div>
+  <div class="card">
+    <div class="row-line"><span class="l">Marked sold as of</span><span class="v">${fmtMonth(parseD(prop.soldDate))}</span></div>
+    <div class="dim" style="font-size:10.5px; margin-top:2px;">Rent, taxes, insurance, and the mortgage all stop counting for this property from that month on, everywhere in the app.</div>
+    <div style="text-align:right; margin-top:8px;"><span class="link" style="font-size:13px; color:var(--danger);" onclick="prop_undoSold('${prop.id}')">Undo &mdash; this wasn&rsquo;t a real sale</span></div>
+  </div>` : '';
+  if(!editing && value==null) return soldBanner;
+  return soldBanner + `
   <div class="section-label" style="margin-top:18px;">Value</div>
   <div class="card">
     ${editing ? `
@@ -2062,6 +2076,10 @@ function renderSheet(){
     const f = state.fvm;
     const lump = fvmEffectiveLump();
     const netProceeds = f.saleOpen ? fvmSaleNetProceeds() : 0;
+    const pickedInv = f.selectedCol && f.selectedCol!=='gt' ? findInvestment(f.selectedCol) : null;
+    const canCommit = f.whatIfOpen && lump!==0 && !!pickedInv;
+    const commitDate = f.lumpDate ? parseD(f.lumpDate) : TODAY;
+    const isPastOrToday = commitDate<=TODAY;
     return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
       <div class="sheet-handle"></div>
       ${sheetHead('What if I add money?', 'A hypothetical lump sum, previewed against a real account', false)}
@@ -2103,7 +2121,19 @@ function renderSheet(){
       <div class="sort-row" style="margin:2px 0 0;">
         ${investments.filter(i=>i.committed!==false).map(inv=>`<div class="chip ${f.selectedCol===inv.id?'active':''}" onclick="fvm_pickWhatIfAccount('${inv.id}')">${displayName(inv)}</div>`).join('')}
       </div>
-      ${lump!==0 ? `<div class="dim" style="font-size:11px; margin-top:12px;">${f.selectedCol && f.selectedCol!=='gt' ? `Showing on ${displayName(findInvestment(f.selectedCol))}&rsquo;s column now &mdash; close this to see ${fmtSigned$(lump)} land there in ${f.lumpDate?fmtMonth(parseD(f.lumpDate)):fmtMonth(TODAY)}` : 'Pick an account above to preview it there'}${f.saleOpen&&f.salePropId?' &mdash; and that property&rsquo;s cash flow drops out of every column from that month on':''}.</div>` : ''}
+      ${lump!==0 ? `<div class="dim" style="font-size:11px; margin-top:12px;">${pickedInv ? `Showing on ${displayName(pickedInv)}&rsquo;s column now &mdash; close this to see ${fmtSigned$(lump)} land there in ${f.lumpDate?fmtMonth(parseD(f.lumpDate)):fmtMonth(TODAY)}` : 'Pick an account above to preview it there'}${f.saleOpen&&f.salePropId?' &mdash; and that property&rsquo;s cash flow drops out of every column from that month on':''}.</div>` : ''}
+      ${canCommit ? (isPastOrToday ? `
+      <div class="btn-row" style="margin-top:14px;">
+        <div class="btn btn-primary" onclick="fvm_commitWhatIf('confirmed')">Record</div>
+      </div>
+      <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">This month is now, so this updates ${displayName(pickedInv)}&rsquo;s real balance immediately.</div></details>
+      ` : `
+      <div class="btn-row" style="margin-top:14px;">
+        <div class="btn btn-planned" onclick="fvm_commitWhatIf('planned')">Plan (purple)</div>
+        <div class="btn btn-confirm" onclick="fvm_commitWhatIf('confirmed')">Lock in (teal)</div>
+      </div>
+      <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">This turns the preview into a real, editable event on ${displayName(pickedInv)} &mdash; it'll show up on the Income timeline and you can edit or delete it from that cell.${f.saleOpen&&f.salePropId?` ${displayName(findProperty(f.salePropId))} also stops showing rent, tax, and mortgage cost anywhere from ${fmtMonth(commitDate)} on &mdash; undo that anytime from the property&rsquo;s own page.`:''}</div></details>
+      `) : ''}
     </div></div>`;
   }
   if(s.type==='fvmColDetail'){
@@ -3328,7 +3358,7 @@ function renderIncomeTimeline(cols, months, series){
       const rowTotal = series.totals[i];
       const dateKey = mkey(date)+'-01';
       return `<tr id="incomerow-${i}" class="${timelineRowClass(i, months.length)}">
-        <td>${fmtMonth(date)}</td>
+        <td style="cursor:pointer;" onclick="timelineHighlightDate('${mkey(date)}')">${fmtMonth(date)}</td>
         <td style="font-weight:700; color:${rowTotal>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(rowTotal)}</td>
         ${cols.map(c=>{
           const v = series.bySourceId[c.id][i];
@@ -4257,6 +4287,35 @@ function fvm_selectCol(id){ state.fvm.selectedCol = id; state.multCursor = -1; o
    itself and without navigating away — picking a column used to require closing this sheet
    and finding the right header among many, which wasn't obvious as the next step at all. */
 function fvm_pickWhatIfAccount(id){ state.fvm.selectedCol = id; state.multCursor = -1; render(); }
+/* Turns the ephemeral what-if preview into a real, editable investment event —
+   same shape invAction_submitCell writes, so it shows up and can be edited/deleted
+   from the Income timeline's own cell editor afterward. */
+function fvm_commitWhatIf(status){
+  const f = state.fvm;
+  const lump = fvmEffectiveLump();
+  const inv = f.selectedCol && f.selectedCol!=='gt' ? findInvestment(f.selectedCol) : null;
+  if(!inv || lump===0) return;
+  const date0 = f.lumpDate || (mkey(TODAY)+'-01');
+  const isPastOrToday = parseD(date0)<=TODAY;
+  const type = lump>0 ? 'deposit' : 'withdrawal';
+  const amt = Math.abs(lump);
+  const note = f.saleOpen && f.salePropId ? `Sale: ${displayName(findProperty(f.salePropId))}` : 'What-if lump sum';
+  const finalStatus = isPastOrToday ? 'confirmed' : status;
+  inv.events = inv.events||[];
+  inv.events.push({ id:newInvEventId(), type, date:date0, amount:amt, note, status:finalStatus });
+  if(isPastOrToday){
+    inv.balance += invEventSign(type)*amt;
+    inv.balanceDate = mkey(TODAY)+'-01';
+  }
+  if(f.saleOpen && f.salePropId){
+    const prop = findProperty(f.salePropId);
+    if(prop) prop.soldDate = date0;
+  }
+  state.fvm.whatIfOpen=false; state.fvm.saleOpen=false; state.fvm.salePropId=null;
+  state.fvm.salePrice=0; state.fvm.lump=0; state.fvm.selectedCol=null;
+  RAW['in-fvm-lump']=''; RAW['in-fvm-saleprice']='';
+  closeSheet();
+}
 function fvmActiveSeries(){
   const {cols, gtSeries} = fvmBuildColumns();
   if(state.fvm.selectedCol==='gt') return gtSeries;
@@ -4423,7 +4482,7 @@ function renderFVM(){
       const dateStr = mkey(date)+'-01';
       const g = growthSeries[i];
       return `<tr id="fvmrow-${i}" class="${timelineRowClass(i, FVM_MONTHS)}">
-        <td>${fmtMonth(date)}</td>
+        <td style="cursor:pointer;" onclick="timelineHighlightDate('${mkey(date)}')">${fmtMonth(date)}</td>
         <td style="cursor:pointer; color:${g>=0?'var(--principal)':'var(--interest)'};" onclick="fvm_showBreakdown('growth','${dateStr}')">${fmtSigned$(g)}</td>
         <td style="cursor:pointer; ${f.selectedCol==='gt'?'font-weight:700; color:var(--principal);':''}" onclick="fvm_showBreakdown('total','${dateStr}')">${fmt$(gtSeries[i])}</td>
         ${cols.map(c=>`<td style="cursor:pointer; ${c.id===f.selectedCol?'font-weight:700; color:var(--principal);':''}" onclick="inv_openCellAction('${c.id}','${dateStr}')">${fmt$(c.series[i])}</td>`).join('')}
