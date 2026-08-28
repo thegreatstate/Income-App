@@ -932,6 +932,7 @@ const state = { tab:'fvm', pushed:null, sheet:null, sheetEdit:false, propEdit:fa
       stateRate:5, dueMonths:[4,6,9,1] } },
   settingsOpen:{ general:true, pm:false, defaults:false, rates:false, events:false, estTax:false },
   portfolioAnalyzerOpen:false,
+  spendCompare:{ a:null, b:null },
   planner:{}, analyzerSel:{}, azSections:{},
   cas:{ selectedId:'montana2', customBalance:350000, customRate:5.99, customTermYears:27,
     prepay:50000, grossReturn:4.5, taxRate:24, horizonKey:'5', horizonYearsCustom:5,
@@ -1766,6 +1767,35 @@ function renderSheet(){
       </div>`).join('')}
       <div style="text-align:center; margin-top:8px;"><button class="btn-ghost-sm" onclick="spendingOverride_add()">+ Add scheduled change</button></div>
       <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">A scheduled change replaces the normal draw for that date range only &mdash; it automatically goes back to normal the month after it ends. Use this for things like a bigger draw to cover an estimated tax bill.</div></details>
+      <div style="text-align:right; margin-top:10px;"><span class="link" style="font-size:13px;" onclick="closeSheet(); openSheet({type:'spendCompare'})">Compare spending levels &rsaquo;</span></div>
+    </div></div>`;
+  }
+  if(s.type==='spendCompare'){
+    const cur = state.settings.monthlySpending||0;
+    const a = state.spendCompare.a, b = state.spendCompare.b;
+    const years = [10,20,30];
+    const scenarios = [
+      { label:'Current', amount:cur, editable:false },
+      { label:'Scenario A', amount:a, editable:true, key:'a' },
+      { label:'Scenario B', amount:b, editable:true, key:'b' },
+    ];
+    const rows = scenarios.map(sc=>{
+      const amt = sc.amount==null ? cur : sc.amount;
+      const amtCell = sc.editable
+        ? `<span class="suffix">$</span><input type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-spendcmp-'+sc.key, sc.amount||'')}" oninput="RAW['in-spendcmp-${sc.key}']=this.value; spendCompare_set('${sc.key}',this.value)"/>`
+        : `<span class="v">${fmt$(amt)}</span>`;
+      return `<div class="cost-row" style="margin-bottom:10px;">
+        <div class="top"><span class="l">${sc.label}</span><span style="display:flex; align-items:center; gap:6px;">${amtCell}</span></div>
+        <div class="stat-row" style="margin-top:8px;">
+          ${years.map(y=>`<div class="stat-pill"><div class="v" style="font-size:14px;">${fmt$(fvmGrandTotalWithSpending(amt, y*12))}</div><div class="l">${y}yr</div></div>`).join('')}
+        </div>
+      </div>`;
+    }).join('');
+    return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
+      <div class="sheet-handle"></div>
+      ${sheetHead('Compare Spending Levels', 'Grand Total at each horizon, same everything else', false)}
+      ${rows}
+      <details class="footnote" style="margin-top:8px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Reruns the same FVM projection at each monthly draw &mdash; nothing else changes (growth-share splits, loans, taxes if enabled, all identical). Set Scenario A/B to $0 to leave them matching Current.</div></details>
     </div></div>`;
   }
   if(s.type==='incomeList'){
@@ -3979,6 +4009,22 @@ function fvmSeriesWithLump(boostInvId, boostAmount, boostDateStr, excludePropId,
   const idx = boostDateStr ? Math.max(0, Math.min(monthsCount-1, monthIndexFromToday(parseD(boostDateStr)))) : 0;
   const boostSpec = (boostInvId && boostAmount) ? { invId: boostInvId, amount: boostAmount, idx } : null;
   return fvmBalanceSeries(monthsCount, excludePropId, boostSpec, idx);
+}
+function spendCompare_set(key, v){ RAW['in-spendcmp-'+key]=v; state.spendCompare[key] = numFrom(v)||null; render(); }
+/* Same temporary-mutate-compute-restore pattern as fvmSeriesWithLump — swap the monthly
+   draw, run the real projection engine, read Grand Total at the target month, put it back.
+   Nothing else about the projection changes (growth-share, loans, taxes if enabled). */
+function fvmGrandTotalWithSpending(monthlySpending, monthsCount){
+  const orig = state.settings.monthlySpending;
+  state.settings.monthlySpending = monthlySpending;
+  try{
+    const series = fvmBalanceSeries(monthsCount, null);
+    let total = 0;
+    investments.filter(i=>i.committed!==false).forEach(inv=>{ total += series.balances[inv.id][monthsCount-1]; });
+    return total;
+  } finally {
+    state.settings.monthlySpending = orig;
+  }
 }
 function fvmBuildColumns(){
   const f = state.fvm;
