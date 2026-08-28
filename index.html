@@ -80,6 +80,14 @@ html,body{margin:0; height:100%; overflow:hidden; background:var(--bg);}
   overflow:hidden; display:flex; flex-direction:column; position:relative;
   padding-top:calc(env(safe-area-inset-top) + 10px); padding-bottom:calc(env(safe-area-inset-bottom) + 10px);
 }
+.phone.privacy-active{ border:2px solid var(--danger); box-shadow:0 30px 80px -20px rgba(0,0,0,.5), 0 0 0 8px color-mix(in srgb, var(--bg) 60%, black 10%), 0 0 0 3px color-mix(in srgb, var(--danger) 35%, transparent); }
+.privacy-badge{
+  position:absolute; top:8px; left:50%; transform:translateX(-50%); z-index:60;
+  background:var(--danger); color:#fff; font-size:10px; font-weight:800; text-transform:uppercase;
+  letter-spacing:.06em; padding:4px 11px; border-radius:20px; display:none; pointer-events:none;
+  white-space:nowrap; box-shadow:0 4px 10px -2px rgba(0,0,0,.4);
+}
+.phone.privacy-active .privacy-badge{ display:block; }
 .screen{ flex:1; overflow-y:auto; overflow-x:hidden; padding:18px 18px 8px; position:relative; }
 .screen::-webkit-scrollbar{width:0;}
 .header{ display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; min-height:32px;}
@@ -256,7 +264,8 @@ details.legend-box p{ margin:8px 0 0; }
 
 
 <div class="stage">
-  <div class="phone">
+  <div class="phone" id="phone">
+    <div class="privacy-badge">&#128274; Privacy mode</div>
     <div class="screen" id="screen"></div>
     <div class="tabbar" id="tabbar"></div>
     <div class="sheet-layer" id="sheetLayer"></div>
@@ -445,7 +454,26 @@ function displayName(obj){
   if(pi>=0) return 'Property '+String.fromCharCode(65+(pi%26));
   const ii = investments.indexOf(obj);
   if(ii>=0) return 'Account '+String.fromCharCode(65+(ii%26));
+  // Remodel/standalone loans (custom-labeled, e.g. a family member's name) aren't in
+  // either array above — findProperty() synthesizes a wrapper object for them on the
+  // fly — so key their pseudonym off the underlying loan id instead.
+  if(obj.isStandaloneLoan && obj.id){
+    const loanIds = [
+      ...properties.flatMap(p=>(p.otherLoans||[]).map(l=>l.id)),
+      ...standaloneLoans.map(l=>l.id)
+    ];
+    const li = loanIds.indexOf(obj.id);
+    if(li>=0) return 'Loan '+String.fromCharCode(65+(li%26));
+  }
   return obj.name;
+}
+/* Transfer events store the other side's name as a plain string at the moment they're
+   recorded (not an id) — real history, so it must never be rewritten. This only swaps
+   the label shown for it at render time, same as everywhere else privacy mode touches. */
+function displayLinkedName(name){
+  if(!name || !state.settings.privacyMode) return name;
+  const inv = investments.find(iv=>iv.name===name);
+  return inv ? displayName(inv) : name;
 }
 function invEventSign(type){ return (type==='deposit'||type==='transfer_in') ? 1 : -1; }
 /* Future-dated events (planned or locked-in) aren't reflected in inv.balance yet —
@@ -634,7 +662,7 @@ function findProperty(id){
   if(direct) return direct;
   for(const p of properties){
     const loan = (p.otherLoans||[]).find(l=>l.id===id);
-    if(loan) return { id:loan.id, name:loan.label.split(' note')[0], type:'Remodel loan &middot; '+p.name, note:null, loans:[loan], isStandaloneLoan:true };
+    if(loan) return { id:loan.id, name:loan.label.split(' note')[0], type:'Remodel loan &middot; '+displayName(p), note:null, loans:[loan], isStandaloneLoan:true };
   }
   const sl = findStandaloneLoan(id);
   if(sl) return { id:sl.id, name:sl.label||'New loan', type:'Loan', note:null, loans:[sl], isStandaloneLoan:true, committed:sl.committed!==false };
@@ -883,6 +911,7 @@ function render(){
   const screen = document.getElementById('screen');
   const tabbar = document.getElementById('tabbar');
   const sheetLayer = document.getElementById('sheetLayer');
+  document.getElementById('phone').classList.toggle('privacy-active', !!state.settings.privacyMode);
   let html = '';
   if(state.pushed){
     if(state.pushed.type==='loan') html = renderLoanDetail(state.pushed.id);
@@ -991,8 +1020,8 @@ function renderPortfolio(){
     <div class="prop-card" onclick="push({type:'loan', id:'${loan.id}'})">
       <div class="prop-top">
         <div>
-          <div class="prop-name">${loan.label.split(' note')[0]}</div>
-          <div class="prop-sub">${parent ? 'Remodel loan &middot; '+parent.name : 'Personal loan'}</div>
+          <div class="prop-name">${displayName(findProperty(loan.id))}</div>
+          <div class="prop-sub">${parent ? 'Remodel loan &middot; '+displayName(parent) : 'Personal loan'}</div>
         </div>
         <div style="text-align:right;">
           <div class="prop-balance">${fmt$(row.balance)}</div>
@@ -1022,8 +1051,8 @@ function otherLoanEntries(){
 function allocationLoans(){
   const list = [];
   properties.forEach(p=>{
-    list.push({ loan:p.loans[0], displayName:p.name, sub:p.type });
-    (p.otherLoans||[]).forEach(l=>{ list.push({ loan:l, displayName:l.label.split(' note')[0], sub:'Remodel loan &middot; '+p.name }); });
+    if(p.loans[0]) list.push({ loan:p.loans[0], displayName:displayName(p), sub:p.type });
+    (p.otherLoans||[]).forEach(l=>{ list.push({ loan:l, displayName:displayName(findProperty(l.id)), sub:'Remodel loan &middot; '+displayName(p) }); });
   });
   return list;
 }
@@ -1498,7 +1527,7 @@ function renderSheet(){
       <div class="dim" style="font-size:11px; margin-bottom:2px;">Which property</div>
       <select onchange="fvm_setSaleProp(this.value)" style="width:100%; background:var(--surface-3); border:1px solid var(--border); border-radius:10px; padding:9px 11px; color:var(--text); font-family:var(--font-ui); font-size:14px; margin-bottom:8px;">
         <option value="">Choose one&hellip;</option>
-        ${properties.map(p=>`<option value="${p.id}" ${f.salePropId===p.id?'selected':''}>${p.name}</option>`).join('')}
+        ${properties.map(p=>`<option value="${p.id}" ${f.salePropId===p.id?'selected':''}>${displayName(p)}</option>`).join('')}
       </select>
       ${f.salePropId ? `
       <div class="dim" style="font-size:11px; margin:8px 0 2px;">Sale price</div>
@@ -1518,7 +1547,7 @@ function renderSheet(){
   if(s.type==='fvmColDetail'){
     return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
       <div class="sheet-handle"></div>
-      ${sheetHead(state.fvm.selectedCol==='gt' ? 'Grand Total' : (findInvestment(state.fvm.selectedCol)||{}).name || 'Account', '', false)}
+      ${sheetHead(state.fvm.selectedCol==='gt' ? 'Grand Total' : displayName(findInvestment(state.fvm.selectedCol)) || 'Account', '', false)}
       ${fvmSelectedDetailCard()}
     </div></div>`;
   }
@@ -1532,7 +1561,7 @@ function renderSheet(){
       ${committedInvestments.map(inv=>{
         const gs = inv.recurring && inv.recurring.growthShare;
         return `<div class="cost-row" style="margin-bottom:8px;">
-          <div class="top"><span class="l" style="cursor:pointer;" onclick="toggleGrowthTarget('${inv.id}')">${gs?'&#9679;':'&#9675;'} ${inv.name}</span></div>
+          <div class="top"><span class="l" style="cursor:pointer;" onclick="toggleGrowthTarget('${inv.id}')">${gs?'&#9679;':'&#9675;'} ${displayName(inv)}</span></div>
           ${gs ? `
           <div class="seg" style="margin-top:6px;">
             <button class="${gs.mode==='pct'?'active':''}" onclick="inv_setGrowthShareMode('${inv.id}','pct')">%</button>
@@ -1704,7 +1733,7 @@ function renderDebtFreePropertyDetail(propId){
   </div>
   <div class="card" style="padding:14px 16px;">
     <div style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;">
-      <div style="font-size:18px; font-weight:700;">${prop.name}</div>
+      <div style="font-size:18px; font-weight:700;">${displayName(prop)}</div>
       <div class="dim" style="font-size:11.5px; white-space:nowrap;">${prop.type}</div>
     </div>
     <div class="big-number" style="margin-top:3px; font-size:27px; color:${cf>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(cf)}/mo</div>
@@ -1743,7 +1772,7 @@ function renderLoanDetail(propId){
 
   <div class="card" style="padding:14px 16px;">
     <div style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;">
-      <div style="font-size:18px; font-weight:700;">${prop.name}</div>
+      <div style="font-size:18px; font-weight:700;">${displayName(prop)}</div>
       <div class="dim" style="font-size:11.5px; white-space:nowrap;">${prop.type}</div>
     </div>
     <div class="big-number" style="margin-top:3px; font-size:27px;">${fmt$(c.balance)}</div>
@@ -1837,7 +1866,7 @@ function renderPlannerSheet(propId){
   const minMonth = mkey(TODAY);
   return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
     <div class="sheet-handle"></div>
-    ${sheetHead('Extra Payment Planner', pm.prop.name, false)}
+    ${sheetHead('Extra Payment Planner', displayName(pm.prop), false)}
     ${entries.length? `
     <div class="dim" style="font-size:11px; text-transform:uppercase; letter-spacing:.06em; font-weight:700; margin-bottom:2px;">Upcoming</div>
     ${entries.map(e=>`<div class="entry-row">
@@ -2760,7 +2789,7 @@ function renderIncomeTimeline(cols, months, series){
 let _incomeTimelineCache = { key:null, html:null };
 function renderIncomeTimelineCached(allSources){
   const timelineCols = state.income.expanded ? allSources : allSources.slice(0,5);
-  const cacheKey = state.income.sortDir+'|'+(state.income.sortKey||'amount')+'|'+state.income.expanded+'|'+
+  const cacheKey = state.income.sortDir+'|'+(state.income.sortKey||'amount')+'|'+state.income.expanded+'|'+state.settings.privacyMode+'|'+
     JSON.stringify(investments)+'|'+
     JSON.stringify(standaloneLoans)+'|'+
     JSON.stringify(properties.map(p=>({id:p.id, taxesAnnual:p.taxesAnnual, insuranceAnnual:p.insuranceAnnual, pmPct:p.pmPct, maintenancePct:p.maintenancePct, customCosts:p.customCosts, units:p.units, loans:p.loans, otherLoans:p.otherLoans, nnn:p.nnn})));
@@ -2946,7 +2975,7 @@ function renderInvActionSheet(){
   const canSubmit = draft.amount>0 && (mode==='withdraw' || draft.toId);
   return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
     <div class="sheet-handle"></div>
-    ${sheetHead(title, inv.name, false)}
+    ${sheetHead(title, displayName(inv), false)}
     <div class="dim" style="font-size:12px; margin-bottom:2px;">Amount</div>
     <div class="input-row"><span class="suffix">$</span><input id="in-invaction-amt" type="text" inputmode="decimal" value="${rv('in-invaction-amt',draft.amount)}" oninput="RAW['in-invaction-amt']=this.value; invAction_setAmount(this.value)"/></div>
     <div class="dim" style="font-size:12px; margin:12px 0 2px;">Date</div>
@@ -2954,7 +2983,7 @@ function renderInvActionSheet(){
     ${mode==='transfer' ? `
     <div class="dim" style="font-size:12px; margin:12px 0 2px;">To</div>
     <div class="sort-row" style="margin:2px 0 0;">
-      ${otherInvs.length===0 ? `<div class="dim" style="font-size:12.5px;">No other investments to transfer to &mdash; add one first.</div>` : otherInvs.map(o=>`<div class="chip ${draft.toId===o.id?'active':''}" onclick="invAction_setTo('${o.id}')">${o.name}</div>`).join('')}
+      ${otherInvs.length===0 ? `<div class="dim" style="font-size:12.5px;">No other investments to transfer to &mdash; add one first.</div>` : otherInvs.map(o=>`<div class="chip ${draft.toId===o.id?'active':''}" onclick="invAction_setTo('${o.id}')">${displayName(o)}</div>`).join('')}
     </div>
     ` : ''}
     <div class="dim" style="font-size:11.5px; margin-top:10px;">Available: ${fmt$(inv.balance)}</div>
@@ -3024,7 +3053,7 @@ function renderInvCellActionSheet(){
   const canSubmit = draft.amount>0;
   return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
     <div class="sheet-handle"></div>
-    ${sheetHead(fmtMonth(parseD(draft.date)), inv.name, false)}
+    ${sheetHead(fmtMonth(parseD(draft.date)), displayName(inv), false)}
     ${existing.length? `
     <div class="dim" style="font-size:11px; text-transform:uppercase; letter-spacing:.06em; font-weight:700; margin-bottom:2px;">Already logged this month</div>
     ${existing.map(e=>`<div class="entry-row">
@@ -3079,7 +3108,7 @@ function renderInvestmentDetail(id){
   <div class="card" style="padding:14px 16px;">
     ${inv.committed===false ? `
     <input id="in-inv-name" type="text" value="${inv.name}" oninput="inv_setName('${id}',this.value)" placeholder="Name this investment" style="font-size:18px; font-weight:700; background:none; border:none; color:var(--text); font-family:var(--font-ui); outline:none; padding:0; width:100%;"/>
-    ` : `<div style="font-size:18px; font-weight:700;">${inv.name}${inv.isSample?' <span class="faint" style="font-weight:600; font-size:11.5px;">(sample)</span>':''}</div>`}
+    ` : `<div style="font-size:18px; font-weight:700;">${displayName(inv)}${inv.isSample?' <span class="faint" style="font-weight:600; font-size:11.5px;">(sample)</span>':''}</div>`}
     <div class="dim" style="font-size:11px; margin-top:6px;">Balance</div>
     ${editing || inv.committed===false ? `
     <div class="input-row" style="background:none; padding:0; margin-top:2px;">
@@ -3178,7 +3207,7 @@ function renderInvestmentDetail(id){
     </div>
     <div style="display:flex; align-items:center; gap:8px;">
       ${e.status?`<span class="entry-badge ${e.status}">${e.status}</span>`:''}
-      <div class="dim" style="font-size:12px;">${e.type==='withdrawal'?'Withdrawn':e.type==='deposit'?'Deposited':e.type==='transfer_out'?'To '+e.linkedName:'From '+e.linkedName}</div>
+      <div class="dim" style="font-size:12px;">${e.type==='withdrawal'?'Withdrawn':e.type==='deposit'?'Deposited':e.type==='transfer_out'?'To '+displayLinkedName(e.linkedName):'From '+displayLinkedName(e.linkedName)}</div>
     </div>
   </div>`).join('')}
   <div style="text-align:center; margin-top:18px;"><span class="link" style="color:var(--danger); font-size:13px;" onclick="if(confirm('Delete ${inv.name.replace(/'/g,"\\'")}?')) inv_delete('${id}')">Delete investment</span></div>
@@ -3455,9 +3484,9 @@ function fvmGrowthBreakdownAt(dateStr){
   // (which reflects the state *after* that month's allocation — growth itself is computed from
   // the balance carried in *before* it). Same figures the table itself used, not a reconstruction.
   const { interestByInv } = fvmBalanceSeries(idx+1);
-  const propItems = properties.map(p=>({name:p.name, amount: propertyCashFlowAtDate(p, date)}));
-  const loanItems = standaloneLoans.filter(l=>l.committed!==false).map(l=>({name:l.label||'Loan', amount: -standaloneLoanPaymentAtDate(l.id, date)}));
-  const invItems = investments.filter(i=>i.committed!==false).map(i=>({name:i.name, amount: interestByInv[i.id] ? interestByInv[i.id][idx] : 0}));
+  const propItems = properties.map(p=>({name:displayName(p), amount: propertyCashFlowAtDate(p, date)}));
+  const loanItems = standaloneLoans.filter(l=>l.committed!==false).map(l=>({name:displayName(findProperty(l.id))||'Loan', amount: -standaloneLoanPaymentAtDate(l.id, date)}));
+  const invItems = investments.filter(i=>i.committed!==false).map(i=>({name:displayName(i), amount: interestByInv[i.id] ? interestByInv[i.id][idx] : 0}));
   const receivables = [...propItems, ...loanItems, ...invItems];
   const totalReceivables = receivables.reduce((s,x)=>s+x.amount,0);
   const investmentInterest = invItems.reduce((s,x)=>s+x.amount,0);
