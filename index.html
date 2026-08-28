@@ -255,7 +255,7 @@ details.legend-box p{ margin:8px 0 0; }
 .az-chevron{ display:inline-block; color:var(--text-dim); margin-right:8px; font-size:11px;}
 .az-section-summary{ font-size:12.5px; color:var(--text-dim); font-weight:500; font-family:var(--font-mono); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
 .az-section-body{ padding:2px 15px 15px;}
-@media (max-width:480px){
+@media (max-width:480px), (max-height:480px) and (orientation:landscape){
   .stage{ height:100dvh; min-height:100dvh; padding:0; }
   .phone{ width:100%; max-width:none; height:100dvh; max-height:none; border-radius:0; border:none; box-shadow:none; }
 }
@@ -357,6 +357,10 @@ function prop_setType(id, val){ const p=findProperty(id); if(p) p.type=val; rend
    partial number than a silently wrong one built on a guess. */
 function prop_setPurchasePrice(id, v){ const p=findProperty(id); if(p) p.purchasePrice = numFrom(v)||null; render(); }
 function prop_setEstimatedValue(id, v){ const p=findProperty(id); if(p){ p.estimatedValue = numFrom(v)||null; p.estimatedValueDate = mkey(TODAY)+'-01'; } render(); }
+function prop_setTaxIncomeSource(id, src){ const p=findProperty(id); if(p) p.taxIncomeSource = src; render(); }
+function prop_setTaxableBaseline(id, v){ RAW['in-prop-taxbaseline-'+id]=v; const p=findProperty(id); if(p) p.taxableIncomeBaseline = numFrom(v); render(); }
+function prop_setEstDepreciation(id, v){ RAW['in-prop-deprec-'+id]=v; const p=findProperty(id); if(p) p.estDepreciationAnnual = numFrom(v); render(); }
+function inv_setTaxTreatment(id, treatment){ const inv=findInvestment(id); if(inv) inv.taxTreatment = treatment; render(); }
 function propertyValue(p){ return p.estimatedValue || p.purchasePrice || null; }
 function propertyEquity(p){ const v = propertyValue(p); if(v==null) return null; return v - propertyCurrent(p).balance; }
 function netWorthTotals(){
@@ -410,26 +414,114 @@ function effectiveSpendingAtDate(date, investmentInterest){
   return baseline + (pct/100)*interest;
 }
 /* ============ ESTIMATED TAXES ============
-   A planning estimate, not a real tax calculation — no depreciation, filing status, QBI,
-   or anything else a real return has. Federal is a real progressive-bracket calc against
-   whatever tiers you enter; State is a single flat rate (most states aren't bracketed the
-   way federal is). Applied quarterly, on whichever months you set, each property/account
-   paying tax on its own income share — see fvmBalanceSeries for where it actually deducts. */
-function taxAnnualFederal(annualIncome, brackets){
-  if(annualIncome<=0) return 0;
+   A planning estimate, not a real tax calculation — no Form 1040, no Schedule E, no AMT,
+   no credits, no depreciation recapture. Uses the incremental method: tax is computed WITH
+   FVM's taxable income and WITHOUT it, and the difference is what's attributable to FVM —
+   this correctly reflects where FVM income actually lands in your bracket stack instead of
+   assuming it starts at the 0% floor, which matters a lot once "Other household income" is
+   nonzero. Ordinary income (property net + interest-bearing accounts) runs through ordinary
+   brackets; "qualified" investments (stock/index funds) aren't taxed annually at all by
+   default, since unrealized appreciation isn't a current tax event — same principle the app
+   already applies everywhere else ("growth" isn't "income"). Federal LTCG/QD stacking and
+   NIIT use real 2026 rules. State comes from a small built-in table (verified) or a flat
+   rate you enter for anywhere not built in yet. */
+const STATE_TAX_PROFILES = {
+  MT: { name:'Montana', kind:'bracket', brackets:[{threshold:0,rate:4.70},{threshold:95000,rate:5.65}] },
+  AZ: { name:'Arizona', kind:'flat', rate:2.5 },
+  AK: { name:'Alaska', kind:'flat', rate:0 },
+  FL: { name:'Florida', kind:'flat', rate:0 },
+  NV: { name:'Nevada', kind:'flat', rate:0 },
+  NH: { name:'New Hampshire', kind:'flat', rate:0 },
+  SD: { name:'South Dakota', kind:'flat', rate:0 },
+  TN: { name:'Tennessee', kind:'flat', rate:0 },
+  TX: { name:'Texas', kind:'flat', rate:0 },
+  WA: { name:'Washington', kind:'flat', rate:0 },
+  WY: { name:'Wyoming', kind:'flat', rate:0 },
+  CUSTOM: { name:'Other (enter a flat rate)', kind:'custom' }
+};
+const FED_LTCG_BRACKETS_2026 = [ {threshold:0,rate:0}, {threshold:98900,rate:15}, {threshold:613700,rate:20} ];
+const NIIT_THRESHOLD_MFJ = 250000; // never inflation-indexed since NIIT began in 2013 — deliberately not escalated below
+const NIIT_RATE = 3.8;
+function escalatedBrackets(brackets, yearsFromNow, pct){
+  if(!yearsFromNow || !pct) return brackets;
+  const mult = Math.pow(1+pct/100, yearsFromNow);
+  return (brackets||[]).map(b=>({ threshold: b.threshold*mult, rate: b.rate }));
+}
+function progressiveTax(income, brackets){
+  if(income<=0) return 0;
   const sorted = [...(brackets||[])].sort((a,b)=>a.threshold-b.threshold);
   let tax = 0;
   for(let i=0;i<sorted.length;i++){
-    if(annualIncome<=sorted[i].threshold) break;
+    if(income<=sorted[i].threshold) break;
     const upper = sorted[i+1] ? sorted[i+1].threshold : Infinity;
-    tax += (Math.min(annualIncome,upper)-sorted[i].threshold) * (sorted[i].rate/100);
+    tax += (Math.min(income,upper)-sorted[i].threshold) * (sorted[i].rate/100);
   }
   return tax;
 }
-function taxAnnualTotal(annualIncome){
+/* Federal LTCG/QD stacking: preferential income sits on top of ordinary income in the
+   bracket stack, so which rate applies depends on how much ordinary income already fills
+   the lower bands — not a flat 15% assumption. */
+function ltcgTax(ordinaryIncome, prefIncome, yearsFromNow, pct){
+  if(prefIncome<=0) return 0;
+  const brackets = escalatedBrackets(FED_LTCG_BRACKETS_2026, yearsFromNow, pct);
+  const sorted = [...brackets].sort((a,b)=>a.threshold-b.threshold);
+  let tax = 0;
+  const floor = Math.max(0, ordinaryIncome);
+  const ceiling = ordinaryIncome + prefIncome;
+  for(let i=0;i<sorted.length;i++){
+    const bandLow = sorted[i].threshold;
+    const bandHigh = sorted[i+1] ? sorted[i+1].threshold : Infinity;
+    const lo = Math.max(floor, bandLow), hi = Math.min(ceiling, bandHigh);
+    if(hi>lo) tax += (hi-lo)*(sorted[i].rate/100);
+  }
+  return tax;
+}
+function niitTax(magi, netInvestmentIncome){
   const tx = state.settings.tax;
-  if(!tx || !tx.enabled || annualIncome<=0) return 0;
-  return taxAnnualFederal(annualIncome, tx.fedBrackets) + annualIncome*((tx.stateRate||0)/100);
+  if(!tx.useNIIT || netInvestmentIncome<=0 || magi<=NIIT_THRESHOLD_MFJ) return 0;
+  return NIIT_RATE/100 * Math.min(netInvestmentIncome, magi-NIIT_THRESHOLD_MFJ);
+}
+function stateOrdinaryTax(income, yearsFromNow){
+  const tx = state.settings.tax;
+  const profile = STATE_TAX_PROFILES[tx.stateKey] || STATE_TAX_PROFILES.CUSTOM;
+  if(profile.kind==='flat') return Math.max(0,income)*(profile.rate/100);
+  if(profile.kind==='bracket') return progressiveTax(income, escalatedBrackets(profile.brackets, yearsFromNow, tx.bracketInflationPct));
+  return Math.max(0,income)*((tx.stateRate||0)/100); // custom flat entry
+}
+/* Full household tax: wages/other-income (not investment income, for NIIT purposes) plus
+   FVM's own ordinary income, plus preferential income (household's own outside LTCG/QD —
+   FVM doesn't generate any today, since qualified-treatment investments aren't taxed
+   annually). niiPortion is whichever slice of the total actually counts as net investment
+   income for NIIT — property/interest income and LTCG/QD are NII, wage-like "other income"
+   isn't. Bracket thresholds escalate by the assumed rate below; NIIT's threshold does not. */
+function householdTax(wagesOrdinary, fvmOrdinary, prefIncome, niiPortion, yearsFromNow){
+  const tx = state.settings.tax;
+  const totalOrdinary = wagesOrdinary + fvmOrdinary;
+  const fed = progressiveTax(totalOrdinary, escalatedBrackets(tx.fedBrackets, yearsFromNow, tx.bracketInflationPct))
+            + ltcgTax(totalOrdinary, prefIncome, yearsFromNow, tx.bracketInflationPct);
+  const st = stateOrdinaryTax(totalOrdinary+prefIncome, yearsFromNow);
+  const niit = niitTax(totalOrdinary+prefIncome, niiPortion);
+  return fed+st+niit;
+}
+function investmentTaxTreatment(inv){ return inv.taxTreatment || 'ordinary'; }
+/* Deliberately excludes mortgage principal (not deductible) and includes an optional
+   depreciation estimate (deductible, non-cash) — cash flow and taxable income are NOT the
+   same number for a rental, and using cash flow as a stand-in (the old approach) both
+   over-counts principal as an expense and ignores depreciation entirely. */
+function propertyTaxableIncomeAtDate(prop, date){
+  if((prop.taxIncomeSource||'estimate')==='actual') return prop.taxableIncomeBaseline||0;
+  const gross = propertyRevenueAtDate(prop, date);
+  const primary = prop.loans[0];
+  const prow = primary ? scheduleRowAtDate(primary.id, date) : null;
+  let interestOnly = prow ? prow.interest : 0;
+  interestOnly += (prop.otherLoans||[]).reduce((s,l)=>{ const r=scheduleRowAtDate(l.id, date); return s+(r?r.interest:0); },0);
+  const pm = prop.nnn ? 0 : gross*(prop.pmPct/100);
+  const taxes = prop.nnn ? 0 : (prop.taxesAnnual||0)/12;
+  const insurance = prop.nnn ? 0 : (prop.insuranceAnnual||0)/12;
+  const maintenance = prop.nnn ? 0 : gross*(prop.maintenancePct||0)/100;
+  const custom = prop.nnn ? 0 : propertyCustomCostsMonthly(prop);
+  const depreciation = (prop.estDepreciationAnnual||0)/12;
+  return gross - interestOnly - pm - taxes - insurance - maintenance - custom - depreciation;
 }
 function tax_isDueMonth(date){
   const tx = state.settings.tax;
@@ -929,7 +1021,7 @@ const state = { tab:'fvm', pushed:null, sheet:null, sheetEdit:false, propEdit:fa
   settings:{ showCents:false, weightedYears:true, monthlySpending:9000, spendingPctOfInterest:10, privacyMode:false,
     tax:{ enabled:false,
       fedBrackets:[ {threshold:0, rate:10}, {threshold:23200, rate:12}, {threshold:94300, rate:22}, {threshold:201050, rate:24} ],
-      stateRate:5, dueMonths:[4,6,9,1] } },
+      stateKey:'MT', stateRate:5, otherIncome:0, otherQualifiedIncome:0, useNIIT:true, bracketInflationPct:2.5, dueMonths:[4,6,9,1] } },
   settingsOpen:{ general:true, pm:false, defaults:false, rates:false, events:false, estTax:false },
   portfolioAnalyzerOpen:false,
   spendCompare:{ a:null, b:null },
@@ -1487,6 +1579,30 @@ function renderValueSection(prop, editing){
     ` : `
     <div class="row-line"><span class="l">${prop.estimatedValue?'Estimated value':'Purchase price'}</span><span class="v">${fmt$(value)}</span></div>
     <div class="row-line"><span class="l">Equity</span><span class="v" style="color:${propertyEquity(prop)>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(propertyEquity(prop))}</span></div>
+    `}
+  </div>`;
+}
+/* Setup-time only (editing gate) — this isn't day-to-day operational info like Revenue/Costs,
+   it's a once-in-a-while tax assumption. "Use last return" is both simpler and more accurate
+   than reconstructing a full rental tax calculation, so it's offered first. */
+function renderTaxIncomeSection(prop, editing){
+  if(!editing) return '';
+  const src = prop.taxIncomeSource || 'estimate';
+  const est = propertyTaxableIncomeAtDate(prop, TODAY);
+  return `
+  <div class="section-label" style="margin-top:18px;">Taxable Income</div>
+  <div class="card">
+    <div class="seg" style="margin-bottom:8px;">
+      <button class="${src==='actual'?'active':''}" onclick="prop_setTaxIncomeSource('${prop.id}','actual')">Use last return</button>
+      <button class="${src!=='actual'?'active':''}" onclick="prop_setTaxIncomeSource('${prop.id}','estimate')">Estimate it</button>
+    </div>
+    ${src==='actual' ? `
+    <div class="row-line"><span class="l">Taxable rental income/loss</span><span style="display:flex; align-items:center; gap:6px;"><span class="suffix">$</span><input id="in-prop-taxbaseline-${prop.id}" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-prop-taxbaseline-'+prop.id, prop.taxableIncomeBaseline||'')}" oninput="prop_setTaxableBaseline('${prop.id}',this.value)"/></span></div>
+    <div class="dim" style="font-size:10.5px; margin-top:2px;">From your most recent return / Schedule E for this property &mdash; held flat going forward.</div>
+    ` : `
+    <div class="row-line"><span class="l">Est. annual depreciation <span class="faint">(optional)</span></span><span style="display:flex; align-items:center; gap:6px;"><span class="suffix">$</span><input id="in-prop-deprec-${prop.id}" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-prop-deprec-'+prop.id, prop.estDepreciationAnnual||'')}" oninput="prop_setEstDepreciation('${prop.id}',this.value)"/></span></div>
+    <div class="dim" style="font-size:10.5px; margin-top:2px;">Revenue minus costs minus mortgage interest (pulled from the loan automatically, not principal) minus this. Leave blank to skip it.</div>
+    <div class="row-line" style="border-top:1px solid var(--border); margin-top:8px; padding-top:8px;"><span class="l" style="font-weight:700;">Estimated taxable income</span><span class="v" style="font-weight:700; color:${est>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(est)}/mo</span></div>
     `}
   </div>`;
 }
@@ -2183,6 +2299,7 @@ function renderDebtFreePropertyDetail(propId){
   </div>
   ${linkGridRow(prop, cf)}
   ${renderValueSection(prop, editing)}
+  ${renderTaxIncomeSection(prop, editing)}
   ${renderRevenueSection(prop, editing)}
   ${renderCostsSection(prop, editing)}
   <div class="footnote" style="margin-top:18px; margin-bottom:6px;">No loan on this property, so there's no amortization or extra-payment planner to show &mdash; just revenue and costs.</div>
@@ -2240,6 +2357,7 @@ function renderLoanDetail(propId){
   ${!prop.isStandaloneLoan && editing ? renderLoanFieldsSection(prop) : ''}
   ${!prop.isStandaloneLoan ? linkGridRow(prop, propertyCashFlow(prop)) : ''}
   ${!prop.isStandaloneLoan ? renderValueSection(prop, editing) : ''}
+  ${!prop.isStandaloneLoan ? renderTaxIncomeSection(prop, editing) : ''}
   ${!prop.isStandaloneLoan ? renderRevenueSection(prop, editing) : ''}
   ${!prop.isStandaloneLoan ? renderCostsSection(prop, editing) : ''}
   ${!prop.isStandaloneLoan ? renderInterestSection(prop) : ''}
@@ -3596,6 +3714,15 @@ function renderInvestmentDetail(id){
     <div class="input-row" style="margin-top:2px;"><input id="in-inv-rate" type="text" inputmode="decimal" value="${rv('in-inv-rate',inv.rate)}" oninput="RAW['in-inv-rate']=this.value; inv_set('${id}','rate',this.value)"/><span class="suffix">%</span></div>
     ` : ''}
     ${editing && inv.committed!==false ? `
+    <div class="dim" style="font-size:11px; margin-top:12px;">Tax treatment</div>
+    <div class="seg" style="margin-bottom:2px;">
+      <button class="${investmentTaxTreatment(inv)==='ordinary'?'active':''}" style="font-size:11.5px; padding:8px 4px;" onclick="inv_setTaxTreatment('${id}','ordinary')">Ordinary interest</button>
+      <button class="${investmentTaxTreatment(inv)==='qualified'?'active':''}" style="font-size:11.5px; padding:8px 4px;" onclick="inv_setTaxTreatment('${id}','qualified')">Stock/fund</button>
+      <button class="${investmentTaxTreatment(inv)==='deferred'?'active':''}" style="font-size:11.5px; padding:8px 4px;" onclick="inv_setTaxTreatment('${id}','deferred')">Tax-deferred/Roth</button>
+    </div>
+    <div class="dim" style="font-size:10.5px; margin-bottom:10px;">${investmentTaxTreatment(inv)==='ordinary' ? 'Taxed annually as ordinary income (cash, CDs, money market, bonds).' : investmentTaxTreatment(inv)==='qualified' ? 'Not taxed annually &mdash; growth is unrealized until sold, same as property appreciation.' : 'Not taxed annually &mdash; contributions/withdrawals handled outside this estimate.'}</div>
+    ` : ''}
+    ${editing && inv.committed!==false ? `
     <div class="dim" style="font-size:11px; margin-top:12px;">Recurring monthly amount <span class="faint">(optional)</span></div>
     <div class="seg" style="margin-bottom:8px;">
       <button class="${!(inv.recurring&&inv.recurring.growthShare)?'active':''}" onclick="inv_setRecurringMode('${id}','fixed')">Fixed amount</button>
@@ -3730,6 +3857,11 @@ function tax_toggleDueMonth(m){
   if(idx>=0) dm.splice(idx,1); else dm.push(m);
   render();
 }
+function tax_setOtherIncome(v){ RAW['in-tax-otherincome']=v; state.settings.tax.otherIncome = numFrom(v); render(); }
+function tax_setOtherQualified(v){ RAW['in-tax-otherqual']=v; state.settings.tax.otherQualifiedIncome = numFrom(v); render(); }
+function tax_setStateKey(v){ state.settings.tax.stateKey = v; render(); }
+function tax_toggleNIIT(){ state.settings.tax.useNIIT = !state.settings.tax.useNIIT; render(); }
+function tax_setBracketInflation(v){ RAW['in-tax-inflation']=v; state.settings.tax.bracketInflationPct = parseFloat(v)||0; render(); }
 const SETTINGS_REF_KEYS = ['pm','defaults','rates','events','estTax'];
 function settings_toggleSection(key){ state.settingsOpen[key] = !state.settingsOpen[key]; render(); }
 function settings_toggleAllRef(){
@@ -3824,6 +3956,18 @@ function renderSettings(){
       <div><div class="l" style="font-size:13.5px;">Enabled</div><div class="sub">Deducts a quarterly estimate inside FVM's projection &mdash; off touches nothing</div></div>
       <div class="toggle ${s.tax.enabled?'on':''}" onclick="tax_toggleEnabled()"><div class="knob"></div></div>
     </div>
+
+    <div class="dim" style="font-size:11px; margin:14px 0 4px; text-transform:uppercase; letter-spacing:.06em; font-weight:700;">Other household income</div>
+    <div class="row-line">
+      <span class="l">Outside FVM (wages, etc.)</span>
+      <span style="display:flex; align-items:center; gap:6px;"><span class="suffix">$</span><input id="in-tax-otherincome" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-tax-otherincome',s.tax.otherIncome||'')}" oninput="tax_setOtherIncome(this.value)"/></span>
+    </div>
+    <div class="row-line">
+      <span class="l">Qualified div. / LTCG outside FVM</span>
+      <span style="display:flex; align-items:center; gap:6px;"><span class="suffix">$</span><input id="in-tax-otherqual" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-tax-otherqual',s.tax.otherQualifiedIncome||'')}" oninput="tax_setOtherQualified(this.value)"/></span>
+    </div>
+    <div class="dim" style="font-size:10.5px; margin-top:2px;">A reasonable estimate is enough &mdash; this only determines which bracket FVM's income lands in on top of, not a full return.</div>
+
     <div class="dim" style="font-size:11px; margin:14px 0 4px; text-transform:uppercase; letter-spacing:.06em; font-weight:700;">Federal brackets</div>
     ${s.tax.fedBrackets.map((b,i)=>`
     <div class="row-line">
@@ -3840,20 +3984,36 @@ function renderSettings(){
     </div>`).join('')}
     <div style="text-align:right; margin-top:6px;"><span class="link" style="font-size:12.5px;" onclick="tax_addBracket()">+ Add bracket</span></div>
 
+    <div class="settings-row">
+      <div><div class="l" style="font-size:13.5px;">NIIT</div><div class="sub">3.8% federal surtax above $250k MAGI &mdash; only applies once you're near it</div></div>
+      <div class="toggle ${s.tax.useNIIT?'on':''}" onclick="tax_toggleNIIT()"><div class="knob"></div></div>
+    </div>
+
     <div class="dim" style="font-size:11px; margin:14px 0 4px; text-transform:uppercase; letter-spacing:.06em; font-weight:700;">State</div>
+    <select onchange="tax_setStateKey(this.value)" style="width:100%; background:var(--surface-3); border:1px solid var(--border); border-radius:10px; padding:9px 11px; color:var(--text); font-family:var(--font-ui); font-size:16px; margin-bottom:8px;">
+      ${Object.entries(STATE_TAX_PROFILES).map(([k,p])=>`<option value="${k}" ${s.tax.stateKey===k?'selected':''}>${p.name}</option>`).join('')}
+    </select>
+    ${(STATE_TAX_PROFILES[s.tax.stateKey]||STATE_TAX_PROFILES.CUSTOM).kind==='custom' ? `
     <div class="row-line">
       <span class="l">Flat rate</span>
       <span style="display:flex; align-items:center; gap:6px;">
         <input id="in-tax-state" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-tax-state',s.tax.stateRate)}" oninput="tax_setStateRate(this.value)"/>
         <span class="dim" style="font-size:12.5px;">%</span>
       </span>
+    </div>` : `<div class="dim" style="font-size:11px;">${(STATE_TAX_PROFILES[s.tax.stateKey]||{}).kind==='flat' ? `Flat ${(STATE_TAX_PROFILES[s.tax.stateKey]||{}).rate}%` : 'Bracketed &mdash; rates shown in the breakdown'}</div>`}
+
+    <div class="dim" style="font-size:11px; margin:14px 0 4px; text-transform:uppercase; letter-spacing:.06em; font-weight:700;">Long-range projection</div>
+    <div class="row-line">
+      <span class="l">Assumed bracket inflation</span>
+      <span style="display:flex; align-items:center; gap:6px;"><input id="in-tax-inflation" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-tax-inflation',s.tax.bracketInflationPct)}" oninput="tax_setBracketInflation(this.value)"/><span class="dim" style="font-size:12.5px;">%/yr</span></span>
     </div>
+    <div class="dim" style="font-size:10.5px; margin-top:2px;">Federal/state brackets escalate by this rate over FVM's projection, matching how the IRS actually indexes them &mdash; otherwise 30 years of ordinary compounding looks like climbing tax brackets even with flat real income.</div>
 
     <div class="dim" style="font-size:11px; margin:14px 0 4px; text-transform:uppercase; letter-spacing:.06em; font-weight:700;">Quarterly payment months</div>
     <div class="sort-row" style="margin:2px 0 0;">
       ${Array.from({length:12},(_,mi)=>mi+1).map(m=>`<div class="chip ${s.tax.dueMonths.includes(m)?'active':''}" onclick="tax_toggleDueMonth(${m})">${fmtMonthName(new Date(2000,m-1,1))}</div>`).join('')}
     </div>
-    <details class="footnote" style="margin-top:10px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">A planning estimate, not a real tax calculation &mdash; no depreciation, filing status, or deductions beyond what's already modeled elsewhere. Each property/investment pays its own proportional share, annualized off that month's run rate, out of its own income (property) or balance (investment) &mdash; not a shared household draw. Talk to your accountant for real numbers; this exists so FVM stops pretending taxes don't happen.</div></details>
+    <details class="footnote" style="margin-top:10px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">A planning estimate, not a real tax calculation &mdash; no Form 1040, Schedule E, AMT, or credits. Computed as household tax WITH FVM's income minus WITHOUT it, so it reflects where FVM income actually lands in your brackets. Each property pays tax on its own taxable income (set per-property, not cash flow &mdash; see each property's Value section); each investment pays on its own income only if it's classified "ordinary" (set per-investment) &mdash; stock/fund-style accounts aren't taxed annually by default, since unrealized growth isn't a current tax event. Talk to your accountant for real numbers.</div></details>
   `)}
   `;
 }
@@ -3956,24 +4116,38 @@ function fvmBalanceSeries(monthsCount, excludePropId, boostSpec, excludeFromIdx)
     let propLoan = 0;
     properties.forEach(p=>{ const cf = (p.id!==excludePropId || i<excludeFromIdx) ? propertyCashFlowAtDate(p, date) : 0; propCFByProp[p.id]=cf; propLoan += cf; });
     standaloneLoans.forEach(l=>{ if(l.committed!==false) propLoan -= standaloneLoanPaymentAtDate(l.id, date); });
-    // Estimated quarterly tax: each property/account annualizes at THIS month's run-rate
-    // (a simplification — the app has no concept of trailing income — but "close" per the
-    // household's own framing), pays its own proportional share of the fed+state bracket
-    // calc on total income, taken out of that same source (property income before it joins
-    // the shared pool; investment balance directly) rather than a single household draw.
+    // Estimated quarterly tax, incremental method: household tax WITH FVM's taxable income
+    // minus WITHOUT it — correctly reflects where FVM income actually lands in the bracket
+    // stack instead of assuming it starts at the 0% floor. Each property/account annualizes
+    // at THIS month's run-rate (still a simplification — no trailing-income concept — but
+    // "close" per the household's own framing) and pays its own proportional share, taken
+    // out of that same source (property income before it joins the shared pool; investment
+    // balance directly) rather than a single household draw.
     if(i>0 && tax_isDueMonth(date)){
-      let totalAnnual = 0;
-      const annualBySource = {};
-      properties.forEach(p=>{ const a = propCFByProp[p.id]*12; annualBySource['prop:'+p.id]=a; totalAnnual+=a; });
-      invs.forEach(inv=>{ const a = interestByInv[inv.id][i]*12; annualBySource['inv:'+inv.id]=a; totalAnnual+=a; });
-      const quarterlyTax = taxAnnualTotal(totalAnnual)/4;
-      if(quarterlyTax>0 && totalAnnual>0){
+      const yearsFromNow = i/12;
+      let fvmOrdinary = 0;
+      const ordByProp = {}, ordByInv = {};
+      properties.forEach(p=>{ const a = propertyTaxableIncomeAtDate(p, date)*12; ordByProp['prop:'+p.id]=a; fvmOrdinary+=a; });
+      invs.forEach(inv=>{
+        const a = investmentTaxTreatment(inv)==='ordinary' ? interestByInv[inv.id][i]*12 : 0;
+        ordByInv[inv.id]=a; fvmOrdinary+=a;
+      });
+      const otherIncome = state.settings.tax.otherIncome||0;
+      const otherQual = state.settings.tax.otherQualifiedIncome||0;
+      const taxWithout = householdTax(otherIncome, 0, otherQual, otherQual, yearsFromNow);
+      const taxWith = householdTax(otherIncome, fvmOrdinary, otherQual, otherQual+fvmOrdinary, yearsFromNow);
+      const quarterlyTax = Math.max(0, taxWith-taxWithout)/4;
+      if(quarterlyTax>0 && fvmOrdinary>0){
         properties.forEach(p=>{
-          const amt = quarterlyTax*(annualBySource['prop:'+p.id]/totalAnnual);
+          const share = ordByProp['prop:'+p.id]/fvmOrdinary;
+          if(share<=0) return;
+          const amt = quarterlyTax*share;
           propCFByProp[p.id] -= amt; propLoan -= amt; taxFromProps[i] += amt;
         });
         invs.forEach(inv=>{
-          const amt = quarterlyTax*(annualBySource['inv:'+inv.id]/totalAnnual);
+          const share = ordByInv[inv.id]/fvmOrdinary;
+          if(share<=0) return;
+          const amt = quarterlyTax*share;
           bals[inv.id] = Math.max(0, bals[inv.id]-amt); taxFromInvs[i] += amt;
         });
       }
