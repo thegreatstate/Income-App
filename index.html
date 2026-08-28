@@ -2099,7 +2099,11 @@ function renderSheet(){
       `}
       <div class="dim" style="font-size:11px; margin:12px 0 2px;">When</div>
       <input type="month" value="${mkey(f.lumpDate?parseD(f.lumpDate):TODAY)}" min="${mkey(TODAY)}" oninput="fvm_setLumpDate(this.value)" style="background:var(--surface-3); border:1px solid var(--border); border-radius:10px; padding:9px 11px; color:var(--text); font-family:var(--font-mono); font-size:16px; font-weight:700; width:100%;"/>
-      ${lump!==0 ? `<div class="dim" style="font-size:11px; margin-top:12px;">Close this and select a column on the table to preview ${fmtSigned$(lump)} going there in ${f.lumpDate?fmtMonth(parseD(f.lumpDate)):fmtMonth(TODAY)}${f.saleOpen&&f.salePropId?' &mdash; and that property&rsquo;s cash flow drops out of every column from that month on':''}.</div>` : ''}
+      <div class="dim" style="font-size:11px; margin:12px 0 2px;">Which account gets it</div>
+      <div class="sort-row" style="margin:2px 0 0;">
+        ${investments.filter(i=>i.committed!==false).map(inv=>`<div class="chip ${f.selectedCol===inv.id?'active':''}" onclick="fvm_pickWhatIfAccount('${inv.id}')">${displayName(inv)}</div>`).join('')}
+      </div>
+      ${lump!==0 ? `<div class="dim" style="font-size:11px; margin-top:12px;">${f.selectedCol && f.selectedCol!=='gt' ? `Showing on ${displayName(findInvestment(f.selectedCol))}&rsquo;s column now &mdash; close this to see ${fmtSigned$(lump)} land there in ${f.lumpDate?fmtMonth(parseD(f.lumpDate)):fmtMonth(TODAY)}` : 'Pick an account above to preview it there'}${f.saleOpen&&f.salePropId?' &mdash; and that property&rsquo;s cash flow drops out of every column from that month on':''}.</div>` : ''}
     </div></div>`;
   }
   if(s.type==='fvmColDetail'){
@@ -4249,6 +4253,10 @@ function fvmBreakdownRows(items){
 }
 function fvm_showBreakdown(kind, dateStr){ openSheet({type:'fvmBreakdown', kind, date:dateStr}); }
 function fvm_selectCol(id){ state.fvm.selectedCol = id; state.multCursor = -1; openSheet({type:'fvmColDetail'}); }
+/* Same selection as tapping a column header on the table, but from inside the What-If sheet
+   itself and without navigating away — picking a column used to require closing this sheet
+   and finding the right header among many, which wasn't obvious as the next step at all. */
+function fvm_pickWhatIfAccount(id){ state.fvm.selectedCol = id; state.multCursor = -1; render(); }
 function fvmActiveSeries(){
   const {cols, gtSeries} = fvmBuildColumns();
   if(state.fvm.selectedCol==='gt') return gtSeries;
