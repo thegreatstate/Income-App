@@ -1617,6 +1617,7 @@ function renderSheet(){
         ${Object.entries(INCOME_SORTS).map(([k,v])=>`<div class="chip ${sortKey===k?'active':''}" onclick="setIncomeSort('${k}')">${v.label}${sortKey===k?(sortDir===1?' &uarr;':' &darr;'):''}</div>`).join('')}
       </div>
       ${sources.length===0 ? `<div class="dim" style="font-size:13px; margin-top:10px;">Nothing here yet.</div>` : sources.map(src=>incomeSourceCard(src)).join('')}
+      ${s.kind==='investments' ? `<div style="text-align:right; margin-top:10px;"><span class="link" style="font-size:13px;" onclick="closeSheet(); inv_openAdd()">+ Add investment</span></div>` : ''}
     </div></div>`;
   }
   if(s.type==='plBreakdown'){
@@ -3007,7 +3008,6 @@ function renderIncome(){
     <div class="header" style="margin-bottom:14px;">
       <h1>Income</h1>
       <div style="display:flex; gap:8px; align-items:center;">
-        <details class="footnote" style="margin:0; position:relative;"><summary class="info-btn">&#9432;</summary><div class="footnote-body" style="position:absolute; right:0; top:28px; width:260px; background:var(--surface-3); border:1px solid var(--border); border-radius:12px; padding:12px 14px; z-index:20; font-size:12px; line-height:1.5;">Real estate columns come from each loan's real schedule &mdash; rent and costs assumed to hold steady until you update them. Columns marked ~ are investments, projected at the current rate &mdash; not guaranteed, since markets move. Row for ${fmtMonth(TODAY)} is highlighted as the current month. Showing ${INCOME_MONTHS_AHEAD/12} years out.</div></details>
         <div class="iconbtn" onclick="inv_openAdd()" title="Add a new account">${tabIcon('coin')}</div>
         <div class="iconbtn" onclick="push({type:'settings'})">${tabIcon('gear')}</div>
       </div>
@@ -3023,7 +3023,8 @@ function renderIncome(){
         &middot;
         <span class="link" onclick="openSheet({type:'incomeList', kind:'investments'})">${committedInvestmentsCount} investment${committedInvestmentsCount===1?'':'s'}</span>
       </div>
-      <div style="display:flex; gap:6px;">
+      <div style="display:flex; gap:6px; align-items:center;">
+        <details class="footnote" style="margin:0; position:relative;"><summary class="info-btn" style="width:26px; height:26px;">&#9432;</summary><div class="footnote-body" style="position:absolute; right:0; top:32px; width:260px; background:var(--surface-3); border:1px solid var(--border); border-radius:12px; padding:12px 14px; z-index:20; font-size:12px; line-height:1.5;">Real estate columns come from each loan's real schedule &mdash; rent and costs assumed to hold steady until you update them. Columns marked ~ are investments, projected at the current rate &mdash; not guaranteed, since markets move. Row for ${fmtMonth(TODAY)} is highlighted as the current month. Showing ${INCOME_MONTHS_AHEAD/12} years out.</div></details>
         <div class="iconbtn" style="width:26px; height:26px; color:var(--principal); font-weight:800; font-size:16px;" onclick="inv_openQuickAction('add')" title="Add money">+</div>
         <div class="iconbtn" style="width:26px; height:26px; color:var(--interest); font-weight:800; font-size:16px;" onclick="inv_openQuickAction('spend')" title="Spend / withdraw">&minus;</div>
       </div>
@@ -3929,7 +3930,6 @@ function renderFVM(){
     <div class="header" style="margin-bottom:14px;">
       <h1>FVM</h1>
       <div style="display:flex; gap:8px; align-items:center;">
-        <details class="footnote" style="margin:0; position:relative;"><summary class="info-btn">&#9432;</summary><div class="footnote-body" style="position:absolute; right:0; top:28px; width:260px; background:var(--surface-3); border:1px solid var(--border); border-radius:12px; padding:12px 14px; z-index:20; font-size:12px; line-height:1.5;">Growth is what's left each month after spending &mdash; the same number driving Grand Total's climb. Tap a column to select it, then use &times; to jump to when <i>it</i> doubles, quadruples, and so on. Grand Total is every investment added together, not property value.</div></details>
         <div class="iconbtn" onclick="push({type:'settings'})">${tabIcon('gear')}</div>
       </div>
     </div>
@@ -3942,7 +3942,8 @@ function renderFVM(){
       <div>
         Grand Total today: <b class="mono" style="color:var(--accent); font-weight:700; cursor:pointer;" onclick="fvm_showBreakdown('total','${mkey(TODAY)}-01')">${fmt$(totalInvBalance)}</b>
       </div>
-      <div style="display:flex; gap:6px;">
+      <div style="display:flex; gap:6px; align-items:center;">
+        <details class="footnote" style="margin:0; position:relative;"><summary class="info-btn" style="width:26px; height:26px;">&#9432;</summary><div class="footnote-body" style="position:absolute; right:0; top:32px; width:260px; background:var(--surface-3); border:1px solid var(--border); border-radius:12px; padding:12px 14px; z-index:20; font-size:12px; line-height:1.5;">Growth is what's left each month after spending &mdash; the same number driving Grand Total's climb. Tap a column to select it, then use &times; to jump to when <i>it</i> doubles, quadruples, and so on. Grand Total is every investment added together, not property value.</div></details>
         <div class="iconbtn" style="width:26px; height:26px; color:var(--principal); font-weight:800; font-size:16px;" onclick="fvm_openWhatIf('add')" title="What if I add money">+</div>
         <div class="iconbtn" style="width:26px; height:26px; color:var(--interest); font-weight:800; font-size:16px;" onclick="fvm_openWhatIf('spend')" title="What if I spend money">&minus;</div>
       </div>
