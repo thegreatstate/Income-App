@@ -766,6 +766,14 @@ function incomeSourceAtDate(src, date){
   return invMonthlyReturnAtDate(findInvestment(src.id.slice(4)), date);
 }
 function incomeTotalAtDate(date){ return incomeSources().reduce((s,src)=>s+incomeSourceAtDate(src,date),0); }
+function portfolioBreakdownRows(kind){
+  return properties.map(p=>{
+    const c = propertyCurrent(p);
+    const amount = kind==='balance' ? c.balance : kind==='interest' ? c.interest : kind==='principal' ? c.principal : c.ip;
+    return { name: displayName(p), amount };
+  });
+}
+function portfolio_showBreakdown(kind){ openSheet({type:'portfolioBreakdown', kind}); }
 function portfolioTotals(){
   let balance=0, interest=0, principal=0;
   properties.forEach(p=>{ allLoansOf(p).forEach(l=>{ const row=currentRow(l.id); balance+=row.balance; interest+=row.interest; principal+=row.principal; }); });
@@ -990,14 +998,20 @@ function renderPortfolio(){
   const yrs = portfolioYearsLeft(state.settings.weightedYears);
   const sorted = [...properties].sort((a,b)=>(SORTS[state.sort].fn(a)-SORTS[state.sort].fn(b))*state.sortDir);
   return `
-  <div class="header"><h1>Portfolio</h1><div class="iconbtn" onclick="push({type:'settings'})">${tabIcon('gear')}</div></div>
+  <div class="header">
+    <h1>Portfolio</h1>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <details class="footnote" style="margin:0; position:relative;"><summary class="info-btn">&#9432;</summary><div class="footnote-body" style="position:absolute; right:0; top:28px; width:260px; background:var(--surface-3); border:1px solid var(--border); border-radius:12px; padding:12px 14px; z-index:20; font-size:12px; line-height:1.5;">Total balance is every mortgage still owed across the portfolio &mdash; debt, not net worth. Tap any number below to see how it's built.</div></details>
+      <div class="iconbtn" onclick="push({type:'settings'})">${tabIcon('gear')}</div>
+    </div>
+  </div>
   <div class="card">
     <div class="dim" style="font-size:12.5px;">Total balance &mdash; ${fmtMonth(TODAY)}</div>
-    <div class="big-number" style="margin-top:4px;">${fmt$(tot.balance)}</div>
+    <div class="big-number" style="margin-top:4px; cursor:pointer;" onclick="portfolio_showBreakdown('balance')">${fmt$(tot.balance)}</div>
     <div class="stat-row">
-      <div class="stat-pill"><div class="v" style="color:var(--interest)">${fmt$(tot.interest)}</div><div class="l">Interest / mo</div></div>
-      <div class="stat-pill"><div class="v" style="color:var(--principal)">${fmt$(tot.principal)}</div><div class="l">Principal / mo</div></div>
-      <div class="stat-pill"><div class="v" style="color:var(--accent)">${fmtRatio(tot.ip)}</div><div class="l">Portfolio I/P</div></div>
+      <div class="stat-pill" style="cursor:pointer;" onclick="portfolio_showBreakdown('interest')"><div class="v" style="color:var(--interest)">${fmt$(tot.interest)}</div><div class="l">Interest / mo</div></div>
+      <div class="stat-pill" style="cursor:pointer;" onclick="portfolio_showBreakdown('principal')"><div class="v" style="color:var(--principal)">${fmt$(tot.principal)}</div><div class="l">Principal / mo</div></div>
+      <div class="stat-pill" style="cursor:pointer;" onclick="portfolio_showBreakdown('ip')"><div class="v" style="color:var(--accent)">${fmtRatio(tot.ip)}</div><div class="l">Portfolio I/P</div></div>
     </div>
     <div class="dim" style="font-size:11.5px; margin-top:11px;">${properties.length} propert${properties.length===1?'y':'ies'} &middot; ${properties.reduce((s,p)=>s+allLoansOf(p).length,0)} loan${properties.reduce((s,p)=>s+allLoansOf(p).length,0)===1?'':'s'} &middot; ${fmtYears(yrs)} ${state.settings.weightedYears?'balance-weighted':'unweighted'} avg left</div>
   </div>
@@ -1468,6 +1482,28 @@ function renderSheet(){
         ${Object.entries(INCOME_SORTS).map(([k,v])=>`<div class="chip ${sortKey===k?'active':''}" onclick="setIncomeSort('${k}')">${v.label}${sortKey===k?(sortDir===1?' &uarr;':' &darr;'):''}</div>`).join('')}
       </div>
       ${sources.length===0 ? `<div class="dim" style="font-size:13px; margin-top:10px;">Nothing here yet.</div>` : sources.map(src=>incomeSourceCard(src)).join('')}
+    </div></div>`;
+  }
+  if(s.type==='portfolioBreakdown'){
+    const kind = s.kind;
+    const tot = portfolioTotals();
+    const titleMap = {balance:'Total Balance', interest:'Interest / mo', principal:'Principal / mo', ip:'Portfolio I/P'};
+    const noteMap = {
+      balance:'Every mortgage still owed across the portfolio &mdash; this is debt, not net worth.',
+      interest:'The interest portion of this month&rsquo;s mortgage payment on every loan, added together.',
+      principal:'The principal portion of this month&rsquo;s mortgage payment on every loan, added together.',
+      ip:'Interest &divide; principal, weighted by dollar amount &mdash; not a simple average across properties.'
+    };
+    const colorMap = {balance:'var(--text)', interest:'var(--interest)', principal:'var(--principal)', ip:'var(--accent)'};
+    const rows = portfolioBreakdownRows(kind).filter(r=> kind==='ip' ? true : r.amount>0.5);
+    const rowsHtml = rows.length ? rows.map(r=>`<div class="row-line"><span class="l">${r.name}</span><span class="v" style="color:${colorMap[kind]};">${kind==='ip'?fmtRatio(r.amount):fmt$(r.amount)}</span></div>`).join('') : `<div class="dim" style="font-size:12.5px;">Nothing to show.</div>`;
+    const totalVal = kind==='balance'?fmt$(tot.balance) : kind==='interest'?fmt$(tot.interest) : kind==='principal'?fmt$(tot.principal) : fmtRatio(tot.ip);
+    return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
+      <div class="sheet-handle"></div>
+      ${sheetHead(titleMap[kind], fmtMonth(TODAY), false)}
+      <div class="dim" style="font-size:12px; margin-bottom:8px;">${noteMap[kind]}</div>
+      ${rowsHtml}
+      <div class="row-line" style="border-top:1px solid var(--border); margin-top:4px; padding-top:10px;"><span class="l" style="font-weight:700; color:var(--text);">${kind==='ip'?'Portfolio I/P':'Total'}</span><span class="v" style="font-weight:700;">${totalVal}</span></div>
     </div></div>`;
   }
   if(s.type==='fvmBreakdown'){
