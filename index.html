@@ -1037,7 +1037,7 @@ function portfolioYearsLeft(weighted){
 
 /* ============ FORMATTERS ============ */
 const state = { tab:'fvm', pushed:null, sheet:null, sheetEdit:false, propEdit:false, sort:'balance', sortDir:1,
-  settings:{ showCents:false, weightedYears:true, monthlySpending:9000, spendingPctOfInterest:10, privacyMode:false,
+  settings:{ showCents:false, weightedYears:true, monthlySpending:9000, spendingPctOfInterest:10, privacyMode:false, numberStyle:'off',
     tax:{ enabled:false, mode:'auto', manualQuarterlyAmount:0,
       fedBrackets:[ {threshold:0, rate:10}, {threshold:23200, rate:12}, {threshold:94300, rate:22}, {threshold:201050, rate:24} ],
       stateKey:'MT', stateRate:5, otherIncome:0, otherQualifiedIncome:0, useNIIT:true, bracketInflationPct:2.5, dueMonths:[4,6,9,1] } },
@@ -1130,20 +1130,35 @@ function handleImportFile(input){
 }
 
 function numFrom(v){ return Number(String(v).replace(/[^0-9.\-]/g,''))||0; }
-/* Privacy mode's number side — coarsens whatever's displayed, on top of the name-pseudonym
-   swap above, so a glance at the screen doesn't hand over exact figures either. Six-figure-
-   plus amounts round to the nearest $100k, four/five-figure amounts to the nearest $1,000,
-   and anything smaller to the nearest $500 &mdash; same "flip it back off and it's exact again"
-   deal, nothing underlying ever touched. */
+/* Two ways to coarsen a displayed number — used automatically by privacy mode, and
+   independently pickable on its own (Settings &rsaquo; Rounded numbers) for anyone who
+   just wants less precision day to day. Neither ever touches anything underlying.
+   "rounded" keeps full digits, just less precise ones: nearest $100k above six figures,
+   nearest $1,000 in the thousands, nearest $500 below that.
+   "compact" abbreviates on top of that for a quicker glance: $1.7M, $328K, $300. */
 function privacyRound(n){
   const sign = n<0?-1:1, abs = Math.abs(n);
   const step = abs>=100000 ? 100000 : abs>=1000 ? 1000 : 500;
   return sign*Math.round(abs/step)*step;
 }
+function compactFmt$(n){
+  const sign = n<0?'-':'', abs = Math.abs(n);
+  if(abs>=1000000){
+    const m = Math.round(abs/100000)/10;
+    return sign+'$'+(Number.isInteger(m)?m:m.toFixed(1))+'M';
+  }
+  if(abs>=1000) return sign+'$'+Math.round(abs/1000)+'K';
+  return sign+'$'+(Math.round(abs/100)*100).toLocaleString('en-US');
+}
 function fmt$(n){
   n = Math.round(n*100)/100 || 0;
-  if(state.settings.privacyMode) n = privacyRound(n);
-  const cents = state.settings.showCents && !state.settings.privacyMode;
+  const active = state.settings.privacyMode || state.settings.numberStyle!=='off';
+  if(active){
+    const style = state.settings.numberStyle!=='off' ? state.settings.numberStyle : 'rounded';
+    if(style==='compact') return compactFmt$(n);
+    n = privacyRound(n);
+  }
+  const cents = state.settings.showCents && !active;
   return '$'+n.toLocaleString('en-US',{minimumFractionDigits:cents?2:0, maximumFractionDigits:cents?2:0});
 }
 function fmtSigned$(n){ return (n<0?'-':'+')+fmt$(Math.abs(n)); }
@@ -3420,7 +3435,7 @@ function renderIncomeTimeline(cols, months, series){
 let _incomeTimelineCache = { key:null, html:null };
 function renderIncomeTimelineCached(allSources){
   const timelineCols = state.income.expanded ? allSources : allSources.slice(0,5);
-  const cacheKey = state.income.sortDir+'|'+(state.income.sortKey||'amount')+'|'+state.income.expanded+'|'+state.settings.privacyMode+'|'+
+  const cacheKey = state.income.sortDir+'|'+(state.income.sortKey||'amount')+'|'+state.income.expanded+'|'+state.settings.privacyMode+'|'+state.settings.numberStyle+'|'+
     JSON.stringify(investments)+'|'+
     JSON.stringify(standaloneLoans)+'|'+
     JSON.stringify(properties.map(p=>({id:p.id, taxesAnnual:p.taxesAnnual, insuranceAnnual:p.insuranceAnnual, pmPct:p.pmPct, maintenancePct:p.maintenancePct, customCosts:p.customCosts, units:p.units, loans:p.loans, otherLoans:p.otherLoans, nnn:p.nnn})));
@@ -3911,6 +3926,7 @@ function renderGoalsPlaceholder(){
 
 /* ============ SETTINGS ============ */
 function toggleSetting(key){ state.settings[key] = !state.settings[key]; render(); }
+function settings_setNumberStyle(v){ state.settings.numberStyle = v; render(); }
 function tax_toggleEnabled(){ state.settings.tax.enabled = !state.settings.tax.enabled; render(); }
 function tax_addBracket(){ state.settings.tax.fedBrackets.push({threshold:0, rate:0}); render(); }
 function tax_removeBracket(i){ state.settings.tax.fedBrackets.splice(i,1); render(); }
@@ -3975,8 +3991,14 @@ function renderSettings(){
       <div class="section-label">Data</div>
       <div class="settings-row"><div><div class="l">Show all general data</div><div class="sub">Expand property fees, defaults, rates &amp; events below</div></div>
         <div class="toggle ${allRefOpen?'on':''}" onclick="settings_toggleAllRef()"><div class="knob"></div></div></div>
-      <div class="settings-row"><div><div class="l">Privacy mode</div><div class="sub">Swaps names for generic labels &mdash; nothing else changes, flip back any time</div></div>
+      <div class="settings-row"><div><div class="l">Privacy mode</div><div class="sub">Swaps names for generic labels and rounds every number &mdash; nothing underlying changes, flip back any time</div></div>
         <div class="toggle ${s.privacyMode?'on':''}" onclick="toggleSetting('privacyMode')"><div class="knob"></div></div></div>
+      <div class="settings-row"><div><div class="l">Rounded numbers</div><div class="sub">Same rounding Privacy mode uses, on its own &mdash; names stay real</div></div></div>
+      <div class="seg" style="margin:-4px 0 10px;">
+        <button class="${s.numberStyle==='off'?'active':''}" onclick="settings_setNumberStyle('off')">Off</button>
+        <button class="${s.numberStyle==='rounded'?'active':''}" onclick="settings_setNumberStyle('rounded')">Rounded</button>
+        <button class="${s.numberStyle==='compact'?'active':''}" onclick="settings_setNumberStyle('compact')">Compact (K/M)</button>
+      </div>
       <div class="row-line" style="margin-top:4px;"><span class="l">Last synced</span><span class="v" style="font-family:var(--font-ui); font-weight:600; font-size:13px;">${state.lastSyncAt?fmtDateTime(state.lastSyncAt):'Never'}</span></div>
       <div class="row-line"><span class="l">Export data (.json)</span><button class="selectchip" onclick="exportData()">Export</button></div>
       <div class="row-line"><span class="l">Import data (.json)</span><button class="selectchip" onclick="triggerImport()">Import</button></div>
