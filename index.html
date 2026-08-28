@@ -326,6 +326,30 @@ const properties = [
     loans:[] }
 ];
 function allLoansOf(prop){ return [...prop.loans, ...(prop.otherLoans||[])]; }
+let _nextPropId = 1;
+function newPropId(){ return 'prop'+(_nextPropId++); }
+/* New properties start debt-free (no loans) — that's the simplest existing editable view
+   (renderDebtFreePropertyDetail, reusing renderRevenueSection/renderCostsSection as-is) and
+   avoids inventing a committed/draft convention that every properties.forEach in the app
+   would then need to filter on. Add a mortgage from here isn't wired up yet — flag it if
+   that's needed, since most real properties do carry one. */
+function prop_openAdd(){
+  const id = newPropId();
+  properties.push({ id, name:'New Property', type:'Single Family', note:null,
+    units:[{label:'Unit 1', beds:null, rent:0}],
+    pmPct:10, taxesAnnual:0, insuranceAnnual:0, maintenancePct:0,
+    loans:[] });
+  push({type:'loan', id});
+  state.propEdit = true; // push() itself resets this to false — must set it after, not before
+  render();
+}
+function prop_delete(id){
+  const idx = properties.findIndex(p=>p.id===id);
+  if(idx>=0) properties.splice(idx,1);
+  goBack();
+}
+function prop_setName(id, val){ const p=findProperty(id); if(p) p.name=val; render(); }
+function prop_setType(id, val){ const p=findProperty(id); if(p) p.type=val; render(); }
 /* ---- Standalone loans (not tied to any property) ---- */
 let _nextStandaloneLoanId = 1;
 function newStandaloneLoanId(){ return 'sl'+(_nextStandaloneLoanId++); }
@@ -1618,6 +1642,7 @@ function renderSheet(){
       </div>
       ${sources.length===0 ? `<div class="dim" style="font-size:13px; margin-top:10px;">Nothing here yet.</div>` : sources.map(src=>incomeSourceCard(src)).join('')}
       ${s.kind==='investments' ? `<div style="text-align:right; margin-top:10px;"><span class="link" style="font-size:13px;" onclick="closeSheet(); inv_openAdd()">+ Add investment</span></div>` : ''}
+      ${s.kind==='properties' ? `<div style="text-align:right; margin-top:10px;"><span class="link" style="font-size:13px;" onclick="closeSheet(); prop_openAdd()">+ Add property</span></div>` : ''}
     </div></div>`;
   }
   if(s.type==='plBreakdown'){
@@ -1925,8 +1950,8 @@ function renderDebtFreePropertyDetail(propId){
   </div>
   <div class="card" style="padding:14px 16px;">
     <div style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;">
-      <div style="font-size:18px; font-weight:700;">${displayName(prop)}</div>
-      <div class="dim" style="font-size:11.5px; white-space:nowrap;">${prop.type}</div>
+      ${editing ? `<input type="text" value="${prop.name}" oninput="prop_setName('${propId}',this.value)" placeholder="Property name" style="font-size:18px; font-weight:700; background:none; border:none; color:var(--text); font-family:var(--font-ui); outline:none; padding:0; flex:1; min-width:0;"/>` : `<div style="font-size:18px; font-weight:700;">${displayName(prop)}</div>`}
+      ${editing ? `<input type="text" value="${prop.type}" oninput="prop_setType('${propId}',this.value)" placeholder="Type" style="font-size:11.5px; background:none; border:none; color:var(--text-dim); font-family:var(--font-ui); outline:none; padding:0; text-align:right; width:100px; flex:0 0 auto;"/>` : `<div class="dim" style="font-size:11.5px; white-space:nowrap;">${prop.type}</div>`}
     </div>
     <div class="big-number" style="margin-top:3px; font-size:27px; color:${cf>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(cf)}/mo</div>
     <div class="dim" style="font-size:11.5px; margin-top:4px;">Debt-free &mdash; no mortgage on this property</div>
@@ -1935,6 +1960,7 @@ function renderDebtFreePropertyDetail(propId){
   ${renderRevenueSection(prop, editing)}
   ${renderCostsSection(prop, editing)}
   <div class="footnote" style="margin-top:18px; margin-bottom:6px;">No loan on this property, so there's no amortization or extra-payment planner to show &mdash; just revenue and costs.</div>
+  ${editing ? `<div style="text-align:center; margin-top:18px;"><span class="link" style="color:var(--danger); font-size:13px;" onclick="if(confirm('Delete ${prop.name.replace(/'/g,"\\'")}?')) prop_delete('${propId}')">Delete property</span></div>` : ''}
   `;
 }
 function renderLoanDetail(propId){
