@@ -2859,8 +2859,6 @@ function renderIncome(){
       <h1>Income</h1>
       <div style="display:flex; gap:8px; align-items:center;">
         <details class="footnote" style="margin:0; position:relative;"><summary class="info-btn">&#9432;</summary><div class="footnote-body" style="position:absolute; right:0; top:28px; width:260px; background:var(--surface-3); border:1px solid var(--border); border-radius:12px; padding:12px 14px; z-index:20; font-size:12px; line-height:1.5;">Real estate columns come from each loan's real schedule &mdash; rent and costs assumed to hold steady until you update them. Columns marked ~ are investments, projected at the current rate &mdash; not guaranteed, since markets move. Row for ${fmtMonth(TODAY)} is highlighted as the current month. Showing ${INCOME_MONTHS_AHEAD/12} years out.</div></details>
-        <div class="iconbtn" style="color:var(--principal); font-weight:800; font-size:18px;" onclick="inv_openQuickAction('add')" title="Add money">+</div>
-        <div class="iconbtn" style="color:var(--interest); font-weight:800; font-size:18px;" onclick="inv_openQuickAction('spend')" title="Spend / withdraw">&minus;</div>
         <div class="iconbtn" onclick="inv_openAdd()" title="Add a new account">${tabIcon('coin')}</div>
         <div class="iconbtn" onclick="push({type:'settings'})">${tabIcon('gear')}</div>
       </div>
@@ -2870,10 +2868,16 @@ function renderIncome(){
       <div class="stat-pill" style="cursor:pointer;" onclick="openSheet({type:'incomeAdjust'})"><div class="v">${fmt$(spending)}</div><div class="l">Income &rsaquo;</div></div>
       <div class="stat-pill" style="cursor:pointer;" onclick="openSheet({type:'growthTarget'})"><div class="v" style="color:${growth>=0?'var(--principal)':'var(--interest)'}">${fmtSigned$(growth)}</div><div class="l">Growth &rsaquo;</div></div>
     </div>
-    <div class="dim" style="font-size:11.5px; margin-top:10px;">
-      <span class="link" onclick="openSheet({type:'incomeList', kind:'properties'})">${properties.length} propert${properties.length===1?'y':'ies'}</span>
-      &middot;
-      <span class="link" onclick="openSheet({type:'incomeList', kind:'investments'})">${committedInvestmentsCount} investment${committedInvestmentsCount===1?'':'s'}</span>
+    <div class="dim" style="font-size:11.5px; margin-top:10px; display:flex; justify-content:space-between; align-items:center;">
+      <div>
+        <span class="link" onclick="openSheet({type:'incomeList', kind:'properties'})">${properties.length} propert${properties.length===1?'y':'ies'}</span>
+        &middot;
+        <span class="link" onclick="openSheet({type:'incomeList', kind:'investments'})">${committedInvestmentsCount} investment${committedInvestmentsCount===1?'':'s'}</span>
+      </div>
+      <div style="display:flex; gap:6px;">
+        <div class="iconbtn" style="width:26px; height:26px; color:var(--principal); font-weight:800; font-size:16px;" onclick="inv_openQuickAction('add')" title="Add money">+</div>
+        <div class="iconbtn" style="width:26px; height:26px; color:var(--interest); font-weight:800; font-size:16px;" onclick="inv_openQuickAction('spend')" title="Spend / withdraw">&minus;</div>
+      </div>
     </div>
   </div>
 
@@ -3411,6 +3415,11 @@ function fvm_setLump(v){ RAW['in-fvm-lump']=v; state.fvm.lump = parseFloat(v)||0
 function fvm_setLumpDirection(dir){ state.fvm.lumpDirection = dir; render(); }
 function fvm_setLumpDate(v){ state.fvm.lumpDate = v ? v+'-01' : null; render(); }
 function fvm_toggleWhatIf(){ state.fvm.whatIfOpen = !state.fvm.whatIfOpen; render(); }
+function fvm_openWhatIf(direction){
+  state.fvm.saleOpen = false;
+  if(direction) state.fvm.lumpDirection = direction;
+  openSheet({type:'fvmWhatIf'});
+}
 function fvm_toggleSale(){ state.fvm.saleOpen = !state.fvm.saleOpen; render(); }
 function fvm_setSaleProp(id){ state.fvm.salePropId = id||null; render(); }
 function fvm_setSalePrice(v){ RAW['in-fvm-saleprice']=v; state.fvm.salePrice = parseFloat(v)||0; render(); }
@@ -3701,9 +3710,14 @@ function renderFVM(){
       <div class="stat-pill" style="cursor:pointer;" onclick="openSheet({type:'incomeAdjust'})"><div class="v">${fmt$(spendingToday)}</div><div class="l">Income &rsaquo;</div></div>
       <div class="stat-pill" style="cursor:pointer;" onclick="openSheet({type:'growthTarget'})"><div class="v" style="color:${growthToday>=0?'var(--principal)':'var(--interest)'}">${fmtSigned$(growthToday)}</div><div class="l">Growth &rsaquo;</div></div>
     </div>
-    <div class="dim" style="font-size:11.5px; margin-top:10px;">
-      Grand Total today: <b class="mono" style="color:var(--accent); font-weight:700; cursor:pointer;" onclick="fvm_showBreakdown('total','${mkey(TODAY)}-01')">${fmt$(totalInvBalance)}</b>
-      &middot; <span class="link" onclick="openSheet({type:'fvmWhatIf'})">What if I add money</span>
+    <div class="dim" style="font-size:11.5px; margin-top:10px; display:flex; justify-content:space-between; align-items:center;">
+      <div>
+        Grand Total today: <b class="mono" style="color:var(--accent); font-weight:700; cursor:pointer;" onclick="fvm_showBreakdown('total','${mkey(TODAY)}-01')">${fmt$(totalInvBalance)}</b>
+      </div>
+      <div style="display:flex; gap:6px;">
+        <div class="iconbtn" style="width:26px; height:26px; color:var(--principal); font-weight:800; font-size:16px;" onclick="fvm_openWhatIf('add')" title="What if I add money">+</div>
+        <div class="iconbtn" style="width:26px; height:26px; color:var(--interest); font-weight:800; font-size:16px;" onclick="fvm_openWhatIf('spend')" title="What if I spend money">&minus;</div>
+      </div>
     </div>
   </div>
 
