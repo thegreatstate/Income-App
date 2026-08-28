@@ -82,7 +82,7 @@ html,body{margin:0; height:100%; overflow:hidden; background:var(--bg);}
 }
 .phone.privacy-active{ border:2px solid var(--danger); box-shadow:0 30px 80px -20px rgba(0,0,0,.5), 0 0 0 8px color-mix(in srgb, var(--bg) 60%, black 10%), 0 0 0 3px color-mix(in srgb, var(--danger) 35%, transparent); }
 .privacy-badge{
-  position:absolute; top:8px; left:50%; transform:translateX(-50%); z-index:60;
+  position:absolute; bottom:calc(env(safe-area-inset-bottom) + 60px); left:50%; transform:translateX(-50%); z-index:60;
   background:var(--danger); color:#fff; font-size:10px; font-weight:800; text-transform:uppercase;
   letter-spacing:.06em; padding:4px 11px; border-radius:20px; display:none; pointer-events:none;
   white-space:nowrap; box-shadow:0 4px 10px -2px rgba(0,0,0,.4);
@@ -1035,7 +1035,7 @@ function fmtYears(n){ return n.toFixed(1)+' yrs'; }
 const ICON = {
   home:'<path d="M4 11.5 12 4l8 7.5V20a1 1 0 0 1-1 1h-4.5v-6h-5v6H5a1 1 0 0 1-1-1Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>',
   chart:'<rect x="4" y="12" width="4" height="8" rx="1" fill="currentColor"/><rect x="10" y="7" width="4" height="13" rx="1" fill="currentColor"/><rect x="16" y="3" width="4" height="17" rx="1" fill="currentColor"/>',
-  gear:'<circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.55 1.55M7.15 16.85 5.6 18.4M18.4 18.4l-1.55-1.55M7.15 7.15 5.6 5.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
+  gear:'<circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="3.1" stroke-dasharray="3 3.15"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/>',
   flag:'<path d="M6 3v18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M6 4h12l-3.2 4L18 12H6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>',
   coin:'<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 7.5v9M14.7 9.7c0-1.1-1.2-2-2.7-2s-2.7.9-2.7 2 1.2 1.6 2.7 2 2.7.9 2.7 2-1.2 2-2.7 2-2.7-.9-2.7-2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>'
 };
@@ -1150,7 +1150,10 @@ function renderPortfolio(){
     </div>
   </div>
   <div class="card" style="margin-bottom:10px; cursor:pointer;" onclick="netWorth_showBreakdown()">
-    <div class="dim" style="font-size:12.5px;">Net Worth &mdash; ${fmtMonth(TODAY)}</div>
+    <div class="dim" style="font-size:12.5px; display:flex; justify-content:space-between; align-items:baseline;">
+      <span>Net Worth &mdash; ${fmtMonth(TODAY)}</span>
+      <span>D/E ${nw.netWorth>0 ? fmtRatio(tot.balance/nw.netWorth) : '&mdash;'}</span>
+    </div>
     <div class="big-number" style="margin-top:4px; color:var(--accent);">${fmt$(nw.netWorth)}</div>
     <div class="dim" style="font-size:11.5px; margin-top:6px;">${nw.unvaluedCount>0 ? `${nw.valuedCount} of ${nw.totalProps} properties valued &mdash; partial number, tap to add the rest` : 'Property equity + investments, minus other loans'}</div>
   </div>
@@ -1167,7 +1170,8 @@ function renderPortfolio(){
   <div style="text-align:right; margin:10px 0 0;">
     <span class="link" style="font-size:13px;" onclick="opportunity_show()">Best use of the next dollar &rsaquo;</span>
   </div>
-  <div class="sort-row">
+  <div class="section-label" style="margin-top:18px; display:flex; justify-content:space-between; align-items:center;"><span>Properties</span><span class="link" style="font-size:12px; font-weight:600; text-transform:none; letter-spacing:normal;" onclick="prop_openAdd()">+ Add property</span></div>
+  <div class="sort-row" style="margin-top:0;">
     ${Object.entries(SORTS).map(([k,v])=>`<div class="chip ${state.sort===k?'active':''}" onclick="setSort('${k}')">${v.label}${state.sort===k?(state.sortDir===1?' &uarr;':' &darr;'):''}</div>`).join('')}
   </div>
   ${sorted.map(p=>renderPropCard(p)).join('')}
@@ -1467,7 +1471,7 @@ function renderLoanFieldsSection(prop){
     <div class="row-line"><span class="l">Original amount</span><span style="display:flex; align-items:center; gap:6px;"><span class="suffix">$</span><input id="in-loan-original" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-loan-original',loan.original||'')}" oninput="RAW['in-loan-original']=this.value; propLoan_set('${loan.id}','original',this.value)"/></span></div>
     <div class="row-line"><span class="l">Rate</span><span style="display:flex; align-items:center; gap:6px;"><input id="in-loan-rate" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-loan-rate',loan.rate||'')}" oninput="RAW['in-loan-rate']=this.value; propLoan_set('${loan.id}','rate',this.value)"/><span class="dim" style="font-size:12.5px;">%</span></span></div>
     <div class="row-line"><span class="l">Term</span><span style="display:flex; align-items:center; gap:6px;"><input id="in-loan-term" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-loan-term',loan.term||'')}" oninput="RAW['in-loan-term']=this.value; propLoan_set('${loan.id}','term',this.value)"/><span class="dim" style="font-size:12.5px;">mo</span></span></div>
-    <div class="row-line"><span class="l">Start date</span><input type="month" value="${mkey(parseD(loan.start))}" oninput="propLoan_set('${loan.id}','start',this.value)" style="background:none;border:none;color:var(--text);font-family:var(--font-mono);font-size:14px;font-weight:700;outline:none; text-align:right;"/></div>
+    <div class="row-line"><span class="l">Start date</span><input type="month" value="${mkey(parseD(loan.start))}" oninput="propLoan_set('${loan.id}','start',this.value)" style="background:none;border:none;color:var(--text);font-family:var(--font-mono);font-size:16px;font-weight:700;outline:none; text-align:right;"/></div>
   </div>`;
 }
 function renderValueSection(prop, editing){
@@ -1591,7 +1595,7 @@ function customCostRow(propId, c, editing){
   if(editing){
     return `<div class="cost-row">
       <div class="top" style="gap:8px;">
-        <input id="in-cc-name-${c.id}" type="text" value="${c.name||''}" placeholder="e.g. Trash" oninput="customCost_setName('${propId}','${c.id}',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-ui); font-size:14px; font-weight:600; outline:none; flex:1; min-width:0;"/>
+        <input id="in-cc-name-${c.id}" type="text" value="${c.name||''}" placeholder="e.g. Trash" oninput="customCost_setName('${propId}','${c.id}',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-ui); font-size:16px; font-weight:600; outline:none; flex:1; min-width:0;"/>
         <input id="in-cc-${c.id}" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-cc-'+c.id, c.amount||'')}" oninput="RAW['in-cc-${c.id}']=this.value; customCost_setAmount('${propId}','${c.id}',this.value)"/>
       </div>
       <div class="seg" style="margin-top:8px;">
@@ -1681,8 +1685,8 @@ function unitRow(propId, u, idx, editing){
   return `<div class="row-line"><span class="l">${label}</span><input id="in-unit-${idx}" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-unit-'+idx,u.rent)}" oninput="RAW['in-unit-${idx}']=this.value; rev_set('${propId}',${idx},this.value)"/></div>
   ${increases.map(inc=>`<div class="cost-row" style="margin:4px 0 8px; padding-left:10px;">
     <div class="top" style="gap:8px;">
-      <input type="month" value="${mkey(parseD(inc.date))}" oninput="unitIncrease_setDate('${propId}',${idx},'${inc.id}',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-mono); font-size:13px; font-weight:600; outline:none; flex:1; min-width:0;"/>
-      <input id="in-inc-${inc.id}" type="text" inputmode="decimal" style="width:56px; text-align:right; background:var(--surface-3); border:1px solid var(--border); border-radius:8px; padding:6px 6px; font-family:var(--font-mono); font-size:13px; font-weight:600; color:var(--text);" value="${rv('in-inc-'+inc.id, inc.pct)}" oninput="RAW['in-inc-${inc.id}']=this.value; unitIncrease_setPct('${propId}',${idx},'${inc.id}',this.value)"/>
+      <input type="month" value="${mkey(parseD(inc.date))}" oninput="unitIncrease_setDate('${propId}',${idx},'${inc.id}',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-mono); font-size:16px; font-weight:600; outline:none; flex:1; min-width:0;"/>
+      <input id="in-inc-${inc.id}" type="text" inputmode="decimal" style="width:56px; text-align:right; background:var(--surface-3); border:1px solid var(--border); border-radius:8px; padding:6px 6px; font-family:var(--font-mono); font-size:16px; font-weight:600; color:var(--text);" value="${rv('in-inc-'+inc.id, inc.pct)}" oninput="RAW['in-inc-${inc.id}']=this.value; unitIncrease_setPct('${propId}',${idx},'${inc.id}',this.value)"/>
       <span class="faint" style="font-size:12px;">%</span>
     </div>
     <div class="seg" style="margin-top:6px;">
@@ -1695,9 +1699,9 @@ function unitRow(propId, u, idx, editing){
   ${vacancies.map(v=>`<div class="cost-row" style="margin:4px 0 8px; padding-left:10px;">
     <div class="top" style="gap:8px;">
       <span class="faint" style="font-size:11px;">Vacant</span>
-      <input type="month" value="${mkey(parseD(v.start))}" oninput="unitVacancy_setStart('${propId}',${idx},'${v.id}',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-mono); font-size:13px; font-weight:600; outline:none; flex:1; min-width:0;"/>
+      <input type="month" value="${mkey(parseD(v.start))}" oninput="unitVacancy_setStart('${propId}',${idx},'${v.id}',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-mono); font-size:16px; font-weight:600; outline:none; flex:1; min-width:0;"/>
       <span class="faint" style="font-size:11px;">to</span>
-      <input type="month" value="${mkey(parseD(v.end))}" oninput="unitVacancy_setEnd('${propId}',${idx},'${v.id}',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-mono); font-size:13px; font-weight:600; outline:none; flex:1; min-width:0;"/>
+      <input type="month" value="${mkey(parseD(v.end))}" oninput="unitVacancy_setEnd('${propId}',${idx},'${v.id}',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-mono); font-size:16px; font-weight:600; outline:none; flex:1; min-width:0;"/>
     </div>
     <div class="seg" style="margin-top:6px;">
       <button class="${v.recurring?'active':''}" onclick="unitVacancy_setRecurring('${propId}',${idx},'${v.id}',true)" style="font-size:10.5px; padding:6px 3px;">Every year</button>
@@ -1726,7 +1730,7 @@ function loan_openCellAction(loanId, dateStr){
   push({type:'loan', id:loanId});
   openSheet({type:'planner', id:loanId});
 }
-const editFieldStyle='width:92px; text-align:right; background:var(--surface-3); border:1px solid var(--border); border-radius:8px; padding:6px 8px; font-family:var(--font-mono); font-size:14px; font-weight:600; color:var(--text);';
+const editFieldStyle='width:92px; text-align:right; background:var(--surface-3); border:1px solid var(--border); border-radius:8px; padding:6px 8px; font-family:var(--font-mono); font-size:16px; font-weight:600; color:var(--text);';
 
 function sheetHead(title, propName, showEdit){
   return `<div class="sheet-head"><h2>${title}</h2><div style="display:flex; gap:8px; align-items:center;">
@@ -1754,14 +1758,14 @@ function renderSheet(){
       <div class="dim" style="font-size:11px; text-transform:uppercase; letter-spacing:.06em; font-weight:700; margin-top:16px; margin-bottom:2px;">Scheduled changes</div>
       ${overrides.map(o=>`<div class="cost-row" style="margin:6px 0;">
         <div class="top" style="gap:8px;">
-          <input type="month" value="${mkey(parseD(o.start))}" oninput="spendingOverride_setStart('${o.id}',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-mono); font-size:13px; font-weight:600; outline:none; flex:1; min-width:0;"/>
+          <input type="month" value="${mkey(parseD(o.start))}" oninput="spendingOverride_setStart('${o.id}',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-mono); font-size:16px; font-weight:600; outline:none; flex:1; min-width:0;"/>
           <span class="faint" style="font-size:11px;">to</span>
-          <input type="month" value="${mkey(parseD(o.end))}" oninput="spendingOverride_setEnd('${o.id}',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-mono); font-size:13px; font-weight:600; outline:none; flex:1; min-width:0;"/>
+          <input type="month" value="${mkey(parseD(o.end))}" oninput="spendingOverride_setEnd('${o.id}',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-mono); font-size:16px; font-weight:600; outline:none; flex:1; min-width:0;"/>
         </div>
         <div class="top" style="gap:8px; margin-top:6px;">
           <span class="suffix">$</span>
           <input id="in-sov-amt-${o.id}" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-sov-amt-'+o.id, o.amount||'')}" oninput="RAW['in-sov-amt-${o.id}']=this.value; spendingOverride_setAmount('${o.id}',this.value)"/>
-          <input id="in-sov-note-${o.id}" type="text" value="${o.note||''}" placeholder="e.g. Tax payment" oninput="spendingOverride_setNote('${o.id}',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-ui); font-size:13px; font-weight:600; outline:none; flex:1; min-width:0;"/>
+          <input id="in-sov-note-${o.id}" type="text" value="${o.note||''}" placeholder="e.g. Tax payment" oninput="spendingOverride_setNote('${o.id}',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-ui); font-size:16px; font-weight:600; outline:none; flex:1; min-width:0;"/>
         </div>
         <div style="text-align:right; margin-top:4px;"><span class="link" style="color:var(--danger); font-size:11px;" onclick="spendingOverride_delete('${o.id}')">Remove</span></div>
       </div>`).join('')}
@@ -1812,7 +1816,6 @@ function renderSheet(){
       </div>
       ${sources.length===0 ? `<div class="dim" style="font-size:13px; margin-top:10px;">Nothing here yet.</div>` : sources.map(src=>incomeSourceCard(src)).join('')}
       ${s.kind==='investments' ? `<div style="text-align:right; margin-top:10px;"><span class="link" style="font-size:13px;" onclick="closeSheet(); inv_openAdd()">+ Add investment</span></div>` : ''}
-      ${s.kind==='properties' ? `<div style="text-align:right; margin-top:10px;"><span class="link" style="font-size:13px;" onclick="closeSheet(); prop_openAdd()">+ Add property</span></div>` : ''}
     </div></div>`;
   }
   if(s.type==='plBreakdown'){
@@ -1979,7 +1982,7 @@ function renderSheet(){
       ` : ''}
       `}
       <div class="dim" style="font-size:11px; margin:12px 0 2px;">When</div>
-      <input type="month" value="${mkey(f.lumpDate?parseD(f.lumpDate):TODAY)}" min="${mkey(TODAY)}" oninput="fvm_setLumpDate(this.value)" style="background:var(--surface-3); border:1px solid var(--border); border-radius:10px; padding:9px 11px; color:var(--text); font-family:var(--font-mono); font-size:14px; font-weight:700; width:100%;"/>
+      <input type="month" value="${mkey(f.lumpDate?parseD(f.lumpDate):TODAY)}" min="${mkey(TODAY)}" oninput="fvm_setLumpDate(this.value)" style="background:var(--surface-3); border:1px solid var(--border); border-radius:10px; padding:9px 11px; color:var(--text); font-family:var(--font-mono); font-size:16px; font-weight:700; width:100%;"/>
       ${lump!==0 ? `<div class="dim" style="font-size:11px; margin-top:12px;">Close this and select a column on the table to preview ${fmtSigned$(lump)} going there in ${f.lumpDate?fmtMonth(parseD(f.lumpDate)):fmtMonth(TODAY)}${f.saleOpen&&f.salePropId?' &mdash; and that property&rsquo;s cash flow drops out of every column from that month on':''}.</div>` : ''}
     </div></div>`;
   }
@@ -3514,7 +3517,7 @@ function renderInvCellActionSheet(){
     <div class="sheet-handle"></div>
     ${sheetHead(inv?fmtMonth(parseD(draft.date)):'Add / Withdraw', inv?displayName(inv):'Choose an account', false)}
     <div class="dim" style="font-size:12px; margin-bottom:2px;">When</div>
-    <input type="month" value="${mkey(parseD(draft.date))}" oninput="invAction_setDate(this.value)" style="background:var(--surface-3); border:1px solid var(--border); border-radius:10px; padding:9px 11px; color:var(--text); font-family:var(--font-mono); font-size:14px; font-weight:700; width:100%; margin-bottom:10px;"/>
+    <input type="month" value="${mkey(parseD(draft.date))}" oninput="invAction_setDate(this.value)" style="background:var(--surface-3); border:1px solid var(--border); border-radius:10px; padding:9px 11px; color:var(--text); font-family:var(--font-mono); font-size:16px; font-weight:700; width:100%; margin-bottom:10px;"/>
     ${!inv ? `
     <div class="dim" style="font-size:12px; margin-bottom:2px;">Account</div>
     <div class="sort-row" style="margin:2px 0 0;">
@@ -3539,7 +3542,7 @@ function renderInvCellActionSheet(){
     <div class="dim" style="font-size:12px; margin:12px 0 2px;">Amount</div>
     <div class="input-row"><span class="suffix">$</span><input id="in-cell-amt" type="text" inputmode="decimal" value="${rv('in-cell-amt',draft.amount||'')}" oninput="RAW['in-cell-amt']=this.value; invAction_setAmount(this.value)"/></div>
     <div class="dim" style="font-size:12px; margin:12px 0 2px;">Note <span class="faint">(optional)</span></div>
-    <div class="input-row"><input id="in-cell-note" type="text" value="${draft.note||''}" placeholder="e.g. Property taxes" oninput="invAction_setNote(this.value)" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:15px;font-weight:600;outline:none;width:100%;"/></div>
+    <div class="input-row"><input id="in-cell-note" type="text" value="${draft.note||''}" placeholder="e.g. Property taxes" oninput="invAction_setNote(this.value)" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:16px;font-weight:600;outline:none;width:100%;"/></div>
     <div class="dim" style="font-size:11.5px; margin-top:10px;">Current balance: ${fmt$(inv.balance)}${!isPastOrToday?' &middot; unaffected until '+fmtMonth(parseD(draft.date)):''}</div>
     ${isPastOrToday ? `
     <div class="btn-row" style="margin-top:14px;">
@@ -3605,7 +3608,7 @@ function renderInvestmentDetail(id){
     </div>
     <div class="input-row">${inv.recurring.growthShare.mode==='fixed'?'<span class="suffix">$</span>':''}<input id="in-gs-value" type="text" inputmode="decimal" value="${rv('in-gs-value',inv.recurring.growthShare.value||'')}" oninput="RAW['in-gs-value']=this.value; inv_setGrowthShareValue('${id}',this.value)"/>${inv.recurring.growthShare.mode==='pct'?'<span class="suffix">%</span>':''}</div>
     <div class="dim" style="font-size:10.5px; margin-top:4px;">Whatever's left after your draw, split across every investment set to a growth share &mdash; recalculated fresh every month, not a fixed number.</div>
-    <div class="input-row" style="margin-top:8px;"><input id="in-inv-recur-note" type="text" value="${inv.recurring.note||''}" placeholder="e.g. Household savings sweep" oninput="inv_setRecurringNote('${id}',this.value)" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:14px;font-weight:600;outline:none;width:100%;"/></div>
+    <div class="input-row" style="margin-top:8px;"><input id="in-inv-recur-note" type="text" value="${inv.recurring.note||''}" placeholder="e.g. Household savings sweep" oninput="inv_setRecurringNote('${id}',this.value)" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:16px;font-weight:600;outline:none;width:100%;"/></div>
     <div class="dim" style="font-size:10.5px; margin-top:4px;">Starting ${fmtMonth(parseD(inv.recurring.startDate))} &middot; <span class="link" style="font-size:10.5px;" onclick="inv_clearRecurring('${id}')">Remove</span></div>
     ` : `
     ${inv.recurring&&inv.recurring.amount>0 ? `
@@ -3616,7 +3619,7 @@ function renderInvestmentDetail(id){
     ` : ''}
     <div class="input-row"><span class="suffix">$</span><input id="in-inv-recur" type="text" inputmode="decimal" value="${rv('in-inv-recur',(inv.recurring&&inv.recurring.amount)||'')}" oninput="RAW['in-inv-recur']=this.value; inv_setRecurring('${id}',this.value)"/></div>
     ${inv.recurring&&inv.recurring.amount>0 ? `
-    <div class="input-row" style="margin-top:8px;"><input id="in-inv-recur-note" type="text" value="${inv.recurring.note||''}" placeholder="e.g. Travel fund" oninput="inv_setRecurringNote('${id}',this.value)" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:14px;font-weight:600;outline:none;width:100%;"/></div>
+    <div class="input-row" style="margin-top:8px;"><input id="in-inv-recur-note" type="text" value="${inv.recurring.note||''}" placeholder="e.g. Travel fund" oninput="inv_setRecurringNote('${id}',this.value)" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:16px;font-weight:600;outline:none;width:100%;"/></div>
     <div class="dim" style="font-size:10.5px; margin-top:4px;">Starting ${fmtMonth(parseD(inv.recurring.startDate))} &middot; <span class="link" style="font-size:10.5px;" onclick="inv_clearRecurring('${id}')">Remove</span></div>
     ` : ''}
     `}
