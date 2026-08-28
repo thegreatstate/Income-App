@@ -342,6 +342,32 @@ function effectiveSpendingAtDate(date, investmentInterest){
   const interest = investmentInterest!==undefined ? investmentInterest : totalInvestmentInterestAtDate(date);
   return baseline + (pct/100)*interest;
 }
+/* ============ ESTIMATED TAXES ============
+   A planning estimate, not a real tax calculation — no depreciation, filing status, QBI,
+   or anything else a real return has. Federal is a real progressive-bracket calc against
+   whatever tiers you enter; State is a single flat rate (most states aren't bracketed the
+   way federal is). Applied quarterly, on whichever months you set, each property/account
+   paying tax on its own income share — see fvmBalanceSeries for where it actually deducts. */
+function taxAnnualFederal(annualIncome, brackets){
+  if(annualIncome<=0) return 0;
+  const sorted = [...(brackets||[])].sort((a,b)=>a.threshold-b.threshold);
+  let tax = 0;
+  for(let i=0;i<sorted.length;i++){
+    if(annualIncome<=sorted[i].threshold) break;
+    const upper = sorted[i+1] ? sorted[i+1].threshold : Infinity;
+    tax += (Math.min(annualIncome,upper)-sorted[i].threshold) * (sorted[i].rate/100);
+  }
+  return tax;
+}
+function taxAnnualTotal(annualIncome){
+  const tx = state.settings.tax;
+  if(!tx || !tx.enabled || annualIncome<=0) return 0;
+  return taxAnnualFederal(annualIncome, tx.fedBrackets) + annualIncome*((tx.stateRate||0)/100);
+}
+function tax_isDueMonth(date){
+  const tx = state.settings.tax;
+  return !!(tx && tx.enabled && (tx.dueMonths||[]).includes(date.getMonth()+1));
+}
 function totalInvestmentInterestAtDate(date, excludeId, ownReturnOverride){
   let s = 0;
   investments.forEach(inv2=>{
@@ -788,8 +814,11 @@ function portfolioYearsLeft(weighted){
 
 /* ============ FORMATTERS ============ */
 const state = { tab:'fvm', pushed:null, sheet:null, sheetEdit:false, propEdit:false, sort:'balance', sortDir:1,
-  settings:{ showCents:false, weightedYears:true, monthlySpending:9000, spendingPctOfInterest:10, privacyMode:false },
-  settingsOpen:{ general:true, pm:false, defaults:false, rates:false, events:false },
+  settings:{ showCents:false, weightedYears:true, monthlySpending:9000, spendingPctOfInterest:10, privacyMode:false,
+    tax:{ enabled:false,
+      fedBrackets:[ {threshold:0, rate:10}, {threshold:23200, rate:12}, {threshold:94300, rate:22}, {threshold:201050, rate:24} ],
+      stateRate:5, dueMonths:[4,6,9,1] } },
+  settingsOpen:{ general:true, pm:false, defaults:false, rates:false, events:false, estTax:false },
   portfolioAnalyzerOpen:false,
   planner:{}, analyzerSel:{}, azSections:{},
   cas:{ selectedId:'montana2', customBalance:350000, customRate:5.99, customTermYears:27,
@@ -3433,7 +3462,19 @@ function renderGoalsPlaceholder(){
 
 /* ============ SETTINGS ============ */
 function toggleSetting(key){ state.settings[key] = !state.settings[key]; render(); }
-const SETTINGS_REF_KEYS = ['pm','defaults','rates','events'];
+function tax_toggleEnabled(){ state.settings.tax.enabled = !state.settings.tax.enabled; render(); }
+function tax_addBracket(){ state.settings.tax.fedBrackets.push({threshold:0, rate:0}); render(); }
+function tax_removeBracket(i){ state.settings.tax.fedBrackets.splice(i,1); render(); }
+function tax_setBracketThreshold(i,v){ RAW['in-tax-thresh-'+i]=v; state.settings.tax.fedBrackets[i].threshold = numFrom(v); render(); }
+function tax_setBracketRate(i,v){ RAW['in-tax-rate-'+i]=v; state.settings.tax.fedBrackets[i].rate = parseFloat(v)||0; render(); }
+function tax_setStateRate(v){ RAW['in-tax-state']=v; state.settings.tax.stateRate = parseFloat(v)||0; render(); }
+function tax_toggleDueMonth(m){
+  const dm = state.settings.tax.dueMonths;
+  const idx = dm.indexOf(m);
+  if(idx>=0) dm.splice(idx,1); else dm.push(m);
+  render();
+}
+const SETTINGS_REF_KEYS = ['pm','defaults','rates','events','estTax'];
 function settings_toggleSection(key){ state.settingsOpen[key] = !state.settingsOpen[key]; render(); }
 function settings_toggleAllRef(){
   const allOpen = SETTINGS_REF_KEYS.every(k=>state.settingsOpen[k]);
@@ -3521,6 +3562,43 @@ function renderSettings(){
     <div class="row-line"><span class="l">${displayName(findProperty('gallatin'))} &mdash; 2 lump payments</span><span class="v" style="font-family:var(--font-ui); font-weight:600;">Mar '22, Feb '23</span></div>
     <div style="text-align:right; margin-top:8px;"><span class="link" style="font-size:13px;">Full event log &rsaquo;</span></div>
   `)}
+
+  ${settingsSection('estTax', 'Estimated taxes', `
+    <div class="settings-row" style="padding-top:0;">
+      <div><div class="l" style="font-size:13.5px;">Enabled</div><div class="sub">Deducts a quarterly estimate inside FVM's projection &mdash; off touches nothing</div></div>
+      <div class="toggle ${s.tax.enabled?'on':''}" onclick="tax_toggleEnabled()"><div class="knob"></div></div>
+    </div>
+    <div class="dim" style="font-size:11px; margin:14px 0 4px; text-transform:uppercase; letter-spacing:.06em; font-weight:700;">Federal brackets</div>
+    ${s.tax.fedBrackets.map((b,i)=>`
+    <div class="row-line">
+      <span style="display:flex; align-items:center; gap:6px;">
+        <span class="dim" style="font-size:12px;">Above</span>
+        <span class="suffix">$</span>
+        <input id="in-tax-thresh-${i}" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-tax-thresh-'+i,b.threshold)}" oninput="tax_setBracketThreshold(${i},this.value)"/>
+      </span>
+      <span style="display:flex; align-items:center; gap:6px;">
+        <input id="in-tax-rate-${i}" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-tax-rate-'+i,b.rate)}" oninput="tax_setBracketRate(${i},this.value)"/>
+        <span class="dim" style="font-size:12.5px;">%</span>
+        <span class="link" style="color:var(--danger); font-size:14px; font-weight:700;" onclick="tax_removeBracket(${i})">&times;</span>
+      </span>
+    </div>`).join('')}
+    <div style="text-align:right; margin-top:6px;"><span class="link" style="font-size:12.5px;" onclick="tax_addBracket()">+ Add bracket</span></div>
+
+    <div class="dim" style="font-size:11px; margin:14px 0 4px; text-transform:uppercase; letter-spacing:.06em; font-weight:700;">State</div>
+    <div class="row-line">
+      <span class="l">Flat rate</span>
+      <span style="display:flex; align-items:center; gap:6px;">
+        <input id="in-tax-state" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-tax-state',s.tax.stateRate)}" oninput="tax_setStateRate(this.value)"/>
+        <span class="dim" style="font-size:12.5px;">%</span>
+      </span>
+    </div>
+
+    <div class="dim" style="font-size:11px; margin:14px 0 4px; text-transform:uppercase; letter-spacing:.06em; font-weight:700;">Quarterly payment months</div>
+    <div class="sort-row" style="margin:2px 0 0;">
+      ${Array.from({length:12},(_,mi)=>mi+1).map(m=>`<div class="chip ${s.tax.dueMonths.includes(m)?'active':''}" onclick="tax_toggleDueMonth(${m})">${fmtMonthName(new Date(2000,m-1,1))}</div>`).join('')}
+    </div>
+    <details class="footnote" style="margin-top:10px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">A planning estimate, not a real tax calculation &mdash; no depreciation, filing status, or deductions beyond what's already modeled elsewhere. Each property/investment pays its own proportional share, annualized off that month's run rate, out of its own income (property) or balance (investment) &mdash; not a shared household draw. Talk to your accountant for real numbers; this exists so FVM stops pretending taxes don't happen.</div></details>
+  `)}
   `;
 }
 
@@ -3586,6 +3664,11 @@ function fvmBalanceSeries(monthsCount, excludePropId, boostSpec, excludeFromIdx)
   const result = {}; invs.forEach(inv=> result[inv.id] = new Array(monthsCount));
   const interestByInv = {}; invs.forEach(inv=> interestByInv[inv.id] = new Array(monthsCount));
   const growth = new Array(monthsCount); // total receivables minus spending draw, unclamped — same figure as Income's "Growth" stat, every month
+  // Tracked separately because they hit different places: property tax comes out before that
+  // income joins the shared pool, so it reduces growth[i]; investment tax comes out of that
+  // account's own balance directly, like a withdrawal, and never touches the pool at all.
+  const taxFromProps = new Array(monthsCount).fill(0);
+  const taxFromInvs = new Array(monthsCount).fill(0);
   for(let i=0;i<monthsCount;i++){
     const date = addM(TODAY, i);
     if(i>0){
@@ -3613,9 +3696,32 @@ function fvmBalanceSeries(monthsCount, excludePropId, boostSpec, excludeFromIdx)
     const nonGrowthInterest = invs.filter(inv=>!targetIds.has(inv.id)).reduce((s,inv)=> s+interestByInv[inv.id][i], 0);
     const targetsInterest = targets.reduce((s,t)=> s+interestByInv[t.id][i], 0);
     const totalInterest = nonGrowthInterest + targetsInterest;
+    const propCFByProp = {};
     let propLoan = 0;
-    properties.forEach(p=>{ if(p.id!==excludePropId || i<excludeFromIdx) propLoan += propertyCashFlowAtDate(p, date); });
+    properties.forEach(p=>{ const cf = (p.id!==excludePropId || i<excludeFromIdx) ? propertyCashFlowAtDate(p, date) : 0; propCFByProp[p.id]=cf; propLoan += cf; });
     standaloneLoans.forEach(l=>{ if(l.committed!==false) propLoan -= standaloneLoanPaymentAtDate(l.id, date); });
+    // Estimated quarterly tax: each property/account annualizes at THIS month's run-rate
+    // (a simplification — the app has no concept of trailing income — but "close" per the
+    // household's own framing), pays its own proportional share of the fed+state bracket
+    // calc on total income, taken out of that same source (property income before it joins
+    // the shared pool; investment balance directly) rather than a single household draw.
+    if(i>0 && tax_isDueMonth(date)){
+      let totalAnnual = 0;
+      const annualBySource = {};
+      properties.forEach(p=>{ const a = propCFByProp[p.id]*12; annualBySource['prop:'+p.id]=a; totalAnnual+=a; });
+      invs.forEach(inv=>{ const a = interestByInv[inv.id][i]*12; annualBySource['inv:'+inv.id]=a; totalAnnual+=a; });
+      const quarterlyTax = taxAnnualTotal(totalAnnual)/4;
+      if(quarterlyTax>0 && totalAnnual>0){
+        properties.forEach(p=>{
+          const amt = quarterlyTax*(annualBySource['prop:'+p.id]/totalAnnual);
+          propCFByProp[p.id] -= amt; propLoan -= amt; taxFromProps[i] += amt;
+        });
+        invs.forEach(inv=>{
+          const amt = quarterlyTax*(annualBySource['inv:'+inv.id]/totalAnnual);
+          bals[inv.id] = Math.max(0, bals[inv.id]-amt); taxFromInvs[i] += amt;
+        });
+      }
+    }
     const spending = effectiveSpendingAtDate(date, totalInterest);
     const pool = propLoan + totalInterest - spending;
     growth[i] = pool;
@@ -3640,7 +3746,7 @@ function fvmBalanceSeries(monthsCount, excludePropId, boostSpec, excludeFromIdx)
       bals[inv.id] += bals[inv.id]*(inv.rate||0)/100/12;
     });
   }
-  return { balances: result, growth, interestByInv };
+  return { balances: result, growth, interestByInv, taxFromProps, taxFromInvs };
 }
 /* Boosts (or drains) one account at a chosen month — today by default — and optionally excludes
    a sold property's cash flow from the shared pool, then returns every account's series at once.
@@ -3680,11 +3786,13 @@ function fvmGrowthBreakdownAt(dateStr){
   // growth-share investments through a separate, older joint-walk) and not the balances array
   // (which reflects the state *after* that month's allocation — growth itself is computed from
   // the balance carried in *before* it). Same figures the table itself used, not a reconstruction.
-  const { interestByInv } = fvmBalanceSeries(idx+1);
+  const { interestByInv, taxFromProps } = fvmBalanceSeries(idx+1);
   const propItems = properties.map(p=>({name:displayName(p), amount: propertyCashFlowAtDate(p, date)}));
   const loanItems = standaloneLoans.filter(l=>l.committed!==false).map(l=>({name:displayName(findProperty(l.id))||'Loan', amount: -standaloneLoanPaymentAtDate(l.id, date)}));
   const invItems = investments.filter(i=>i.committed!==false).map(i=>({name:displayName(i), amount: interestByInv[i.id] ? interestByInv[i.id][idx] : 0}));
-  const receivables = [...propItems, ...loanItems, ...invItems];
+  const taxAmt = taxFromProps ? taxFromProps[idx] : 0;
+  const taxItems = taxAmt>0.5 ? [{name:'Estimated taxes', amount:-taxAmt}] : [];
+  const receivables = [...propItems, ...loanItems, ...invItems, ...taxItems];
   const totalReceivables = receivables.reduce((s,x)=>s+x.amount,0);
   const investmentInterest = invItems.reduce((s,x)=>s+x.amount,0);
   const spending = effectiveSpendingAtDate(date, investmentInterest);
