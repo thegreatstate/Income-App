@@ -429,6 +429,12 @@ function spendBalanceOf(acct){ return acct.transactions.reduce((s,t)=>s+t.amount
 function spendTotalBalance(){ return spendAccounts.reduce((s,a)=>s+spendBalanceOf(a),0); }
 function spendGetAccount(id){ return spendAccounts.find(a=>a.id===id); }
 function spendCategoryName(id){ const c=spendCategories.find(c=>c.id===id); return c?c.name:''; }
+/* Deliberately bypasses fmt$'s privacy/rounding settings — an envelope balance is only
+   useful if it's exact ($250 shown as "$300" under Compact mode would defeat the point of
+   tracking it at all), so Spend always shows precise dollar amounts regardless of the rest
+   of the app's display style. */
+function spendFmt$(n){ n = Math.round(n*100)/100 || 0; return '$'+n.toLocaleString('en-US',{minimumFractionDigits:0, maximumFractionDigits:0}); }
+function spendFmtSigned$(n){ return (n<0?'-':'+')+spendFmt$(Math.abs(n)); }
 function spendTodayISO(){ const d=new Date(); return d.toISOString().slice(0,10); }
 function spendFmtDate(iso){
   const d = new Date(iso+'T00:00:00');
@@ -487,15 +493,20 @@ function spendMaterializeRecurring(){
    its own state.screen. Simple Mode (default on) skips straight to the one account's Detail
    screen when exactly one exists, same gating as the standalone app. */
 function spend_open(){
-  if(state.settings.spend.simpleMode && spendAccounts.length===1){
+  if(spendAccounts.length===1){
     state.spendNav.screen='detail'; state.spendNav.currentAccountId=spendAccounts[0].id;
   } else {
     state.spendNav.screen='accounts';
   }
   push({type:'spend'});
 }
+/* "Home" — exactly one account exists, so there's no meaningful list to show; the account's
+   own screen jumps straight back out to FinApp instead of a one-item Accounts list. Purely
+   a function of how many accounts exist right now, not a separate settings toggle to keep
+   in sync — with two accounts (e.g. yours and a partner's) this simply never applies, and
+   the Accounts list is the normal landing screen instead. */
 function spend_isHome(acct){
-  return !!(acct && state.settings.spend.simpleMode && spendAccounts.length===1 && acct.id===spendAccounts[0].id);
+  return !!(acct && spendAccounts.length===1 && acct.id===spendAccounts[0].id);
 }
 function spend_openAccount(id){ state.spendNav.currentAccountId=id; state.spendNav.screen='detail'; render(); }
 function spend_detailBack(){ state.spendNav.screen = 'accounts'; render(); }
@@ -643,26 +654,11 @@ function spend_categoryDrop(targetId){
 }
 
 /* ---- Spend's own settings ---- */
-function spend_toggleSimpleMode(){
-  if(!state.settings.spend.simpleMode){
-    if(spendAccounts.length!==1){
-      alert('Simple Mode needs exactly one account. You currently have '+spendAccounts.length+'. Get down to exactly one account, then try again.');
-      return;
-    }
-    state.settings.spend.simpleMode = true;
-  } else {
-    state.settings.spend.simpleMode = false;
-    state.spendNav.screen = 'accounts';
-  }
-  saveLocalData();
-  render();
-}
 function spend_resetAllData(){
   if(!confirm('This clears every spending account, transaction, and category — nothing else in FinApp is touched. Continue?')) return;
   spendAccounts.length = 0;
   spendCategories.length = 0;
   spendCategories.push(...spendSeedCategories());
-  state.settings.spend = { simpleMode:true };
   state.spendNav = { screen:'accounts', currentAccountId:null };
   saveLocalData();
   render();
@@ -1311,8 +1307,7 @@ const state = { tab:'fvm', pushed:null, sheet:null, sheetEdit:false, propEdit:fa
   settings:{ showCents:false, weightedYears:true, monthlySpending:9000, spendingPctOfInterest:10, privacyMode:false, numberStyle:'compact',
     tax:{ enabled:false, mode:'auto', manualQuarterlyAmount:0,
       fedBrackets:[ {threshold:0, rate:10}, {threshold:23200, rate:12}, {threshold:94300, rate:22}, {threshold:201050, rate:24} ],
-      stateKey:'MT', stateRate:5, otherIncome:0, otherQualifiedIncome:0, useNIIT:true, bracketInflationPct:2.5, dueMonths:[4,6,9,1] },
-    spend:{ simpleMode:true } },
+      stateKey:'MT', stateRate:5, otherIncome:0, otherQualifiedIncome:0, useNIIT:true, bracketInflationPct:2.5, dueMonths:[4,6,9,1] } },
   settingsOpen:{ general:true, pm:false, defaults:false, rates:false, events:false, estTax:false },
   portfolioAnalyzerOpen:false,
   spendCompare:{ a:null, b:null },
@@ -4895,7 +4890,7 @@ function renderSpendAccounts(){
     return `<div class="prop-card" onclick="spend_openAccount('${a.id}')">
       <div class="prop-top">
         <div class="prop-name">${a.name}</div>
-        <div style="text-align:right;"><div class="prop-balance" style="color:${bal<0?'var(--interest)':'var(--text)'};">${fmt$(bal)}</div></div>
+        <div style="text-align:right;"><div class="prop-balance" style="color:${bal<0?'var(--interest)':'var(--text)'};">${spendFmt$(bal)}</div></div>
       </div>
     </div>`;
   }).join('');
@@ -4910,7 +4905,7 @@ function renderSpendAccounts(){
   <h1 style="margin-bottom:14px;">Spending</h1>
   <div class="card" style="margin-bottom:14px;">
     <div class="dim" style="font-size:12.5px;">Total across all accounts</div>
-    <div class="big-number" style="margin-top:4px; color:${spendTotalBalance()<0?'var(--interest)':'var(--text)'};">${fmt$(spendTotalBalance())}</div>
+    <div class="big-number" style="margin-top:4px; color:${spendTotalBalance()<0?'var(--interest)':'var(--text)'};">${spendFmt$(spendTotalBalance())}</div>
   </div>
   <div class="section-label">Accounts</div>
   ${spendAccounts.length ? rows : `<div class="dim" style="font-size:13px;">No accounts yet &mdash; tap + above to add one.</div>`}
@@ -4925,17 +4920,24 @@ function renderSpendDetail(){
   const txs = [...acct.transactions].sort((a,b)=> b.date.localeCompare(a.date) || 0);
   const recurRows = (acct.recurring||[]).map(r=>`
     <div class="cost-row" style="margin-bottom:8px;">
-      <div class="top"><span class="l">${r.description}</span><span class="v" style="color:${r.type==='withdrawal'?'var(--interest)':'var(--principal)'};">${r.type==='withdrawal'?'-':'+'}${fmt$(r.amount)}</span></div>
+      <div class="top"><span class="l">${r.description}</span><span class="v" style="color:${r.type==='withdrawal'?'var(--interest)':'var(--principal)'};">${r.type==='withdrawal'?'-':'+'}${spendFmt$(r.amount)}</span></div>
       <div class="asof">${SPEND_FREQ_LABELS[r.frequency]||r.frequency} &middot; next ${spendFmtNextOccurrence(r)} &middot; <span class="link" style="font-size:10.5px;" onclick="spend_openRecurringForm('${acct.id}','${r.id}')">Edit</span> &middot; <span class="link" style="font-size:10.5px; color:var(--danger);" onclick="if(confirm('Delete this recurring transaction?')) spend_deleteRecurring('${acct.id}','${r.id}')">Delete</span></div>
     </div>`).join('');
   const txRows = txs.map(t=>`
     <div class="row-line" style="cursor:pointer;" onclick="spend_openTxForm('${acct.id}','${t.id}')">
       <span class="l">${t.description}<div class="dim" style="font-size:11.5px; margin-top:2px; font-weight:400;">${spendFmtDate(t.date)}${spendCategoryName(t.category)?` &middot; ${spendCategoryName(t.category)}`:''}${t.recurringId?' &middot; recurring':''}</div></span>
-      <span class="v" style="color:${t.amount<0?'var(--interest)':'var(--principal)'};">${fmtSigned$(t.amount)}</span>
+      <span class="v" style="color:${t.amount<0?'var(--interest)':'var(--principal)'};">${spendFmtSigned$(t.amount)}</span>
     </div>`).join('');
   return `
   <div class="header-sticky">
-    <button class="back" onclick="${isHome?'goBack()':'spend_detailBack()'}">&lsaquo; ${isHome?backLabel():'Accounts'}</button>
+    ${isHome ? `
+    <button class="back" onclick="goBack()">&lsaquo; ${backLabel()}</button>
+    ` : `
+    <div style="display:flex; gap:14px; align-items:center;">
+      <button class="back" onclick="goBack()">&lsaquo; ${backLabel()}</button>
+      <button class="back" onclick="spend_detailBack()">&lsaquo; Spent</button>
+    </div>
+    `}
     <div style="display:flex; gap:8px;">
       ${isHome?`<div class="iconbtn" onclick="spend_openSettings()">${tabIcon('gear')}</div>`:''}
       <div class="iconbtn" onclick="spend_openRecurringForm('${acct.id}', null)">+</div>
@@ -4945,11 +4947,11 @@ function renderSpendDetail(){
     <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
       <div style="font-size:18px; font-weight:700;">${acct.name}</div>
       <div style="display:flex; gap:8px;">
-        <div class="iconbtn" style="width:26px; height:26px; border:1.4px solid var(--principal); border-radius:50%; color:var(--principal); font-weight:800; font-size:16px;" onclick="spend_openTxForm('${acct.id}', null, 'deposit')">+</div>
-        <div class="iconbtn" style="width:26px; height:26px; border:1.4px solid var(--interest); border-radius:50%; color:var(--interest); font-weight:800; font-size:16px;" onclick="spend_openTxForm('${acct.id}', null, 'withdrawal')">&minus;</div>
+        <div class="iconbtn" style="width:26px; height:26px; color:var(--principal); font-weight:800; font-size:16px;" onclick="spend_openTxForm('${acct.id}', null, 'deposit')">+</div>
+        <div class="iconbtn" style="width:26px; height:26px; color:var(--interest); font-weight:800; font-size:16px;" onclick="spend_openTxForm('${acct.id}', null, 'withdrawal')">&minus;</div>
       </div>
     </div>
-    <div class="big-number" style="margin-top:6px; color:${bal<0?'var(--interest)':'var(--text)'};">${fmt$(bal)}</div>
+    <div class="big-number" style="margin-top:6px; color:${bal<0?'var(--interest)':'var(--text)'};">${spendFmt$(bal)}</div>
   </div>
   ${(acct.recurring||[]).length ? `<div class="section-label">Recurring</div>${recurRows}` : ''}
   <div class="section-label">Transactions</div>
@@ -4961,11 +4963,8 @@ function renderSpendSettings(){
   return `
   <div class="header-sticky"><button class="back" onclick="spend_settingsBack()">&lsaquo; Back</button></div>
   <h1 style="margin-bottom:14px;">Spending Settings</h1>
-  <div class="settings-row">
-    <div><div class="l" style="font-size:13.5px;">Simple Mode</div><div class="sub">Skip the account list &mdash; jump straight into your one account</div></div>
-    <div class="toggle ${state.settings.spend.simpleMode?'on':''}" onclick="spend_toggleSimpleMode()"><div class="knob"></div></div>
-  </div>
-  <div class="section-label" style="margin-top:18px;">Manage</div>
+  <div class="section-label">Manage</div>
+  <div class="row-line" style="cursor:pointer;" onclick="state.spendNav.screen='accounts'; render()"><span class="l">Accounts</span><span class="v" style="color:var(--text-dim); font-weight:400;">${spendAccounts.length} &rsaquo;</span></div>
   <div class="row-line" style="cursor:pointer;" onclick="state.spendNav.screen='categories'; render()"><span class="l">Categories</span><span class="v" style="color:var(--text-dim); font-weight:400;">${spendCategories.length} &rsaquo;</span></div>
   <div class="dim" style="font-size:10.5px; margin-top:12px;">Spending accounts, transactions, and categories are included in FinApp's own Export/Import and Reset in the main Settings &mdash; nothing separate to back up here.</div>
   <button class="reset-btn" style="width:100%; margin-top:22px; background:var(--surface-3); border:1px solid var(--border); color:var(--danger); font-weight:600; font-size:15px; padding:13px; border-radius:13px; cursor:pointer;" onclick="spend_resetAllData()">Reset Spending Data</button>
