@@ -1069,7 +1069,8 @@ const state = { tab:'fvm', pushed:null, sheet:null, sheetEdit:false, propEdit:fa
   yr1Idx:-1, yr5Idx:-1, multCursor:-1, // shared jump-button cursors, same reason
   fvm:{ lump:500000, lumpDirection:'add', lumpDate:null, selectedCol:null,
     whatIfOpen:false, saleOpen:false, salePropId:null, salePrice:0, saleCostPct:7, saleTaxPct:20 },
-  lastSyncAt:null
+  lastSyncAt:null,
+  locked:false, lockError:false
 };
 
 /* ============ LOCAL PERSISTENCE + EXPORT/IMPORT ============ */
@@ -1210,12 +1211,33 @@ function openSheet(view){ state.sheet=view; state.sheetEdit=false; state.planner
 function togglePlannerInfo(){ state.plannerInfoOpen=!state.plannerInfoOpen; render(); }
 function closeSheet(){ state.sheet=null; state.azSections={}; for(const k in RAW) delete RAW[k]; render(); }
 
+function renderLockScreen(){
+  return `<div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; padding:32px 24px; text-align:center;">
+    <div style="font-size:32px; margin-bottom:14px;">&#128274;</div>
+    <input id="in-lock-pw" type="password" placeholder="Password" value=""
+      oninput="RAW['in-lock-pw']=this.value"
+      onkeydown="if(event.key==='Enter') lock_tryUnlock()"
+      style="width:100%; max-width:220px; background:var(--surface-3); border:1px solid ${state.lockError?'var(--danger)':'var(--border)'}; border-radius:10px; padding:12px 14px; color:var(--text); font-family:var(--font-ui); font-size:16px; text-align:center; outline:none; margin-bottom:14px;"/>
+    ${state.lockError?`<div class="dim" style="color:var(--danger); font-size:12.5px; margin:-6px 0 10px;">Wrong password.</div>`:''}
+    <div class="btn-row" style="width:100%; max-width:220px;"><div class="btn btn-primary" onclick="lock_tryUnlock()">Unlock</div></div>
+    <div style="margin-top:24px;"><span class="link" style="font-size:11px; color:var(--text-faint);" onclick="lock_forgot()">Forgot? Reset the password</span></div>
+  </div>`;
+}
 /* ============ RENDER ROOT ============ */
 function render(){
   const screen = document.getElementById('screen');
   const tabbar = document.getElementById('tabbar');
   const sheetLayer = document.getElementById('sheetLayer');
   document.getElementById('phone').classList.toggle('privacy-active', !!state.settings.privacyMode);
+  if(state.locked){
+    tabbar.style.display='none';
+    screen.innerHTML = renderLockScreen();
+    sheetLayer.innerHTML = '';
+    sheetLayer.style.pointerEvents = 'none';
+    const pwEl = document.getElementById('in-lock-pw');
+    if(pwEl) pwEl.focus();
+    return;
+  }
   let html = '';
   if(state.pushed){
     if(state.pushed.type==='loan') html = renderLoanDetail(state.pushed.id);
@@ -1575,7 +1597,7 @@ function linkGridRow(prop, cf){
     <div style="text-align:center;"><span class="dim" style="font-size:13px;">Revenue</span><div class="subval mono" style="color:var(--principal)">${fmt$(revenue)}/mo</div></div>
     <div style="text-align:right;"><span class="dim" style="font-size:13px;">Profit</span><div class="subval mono" style="color:${profit>=0?'var(--principal)':'var(--interest)'}">${fmtSigned$(profit)}/mo</div></div>
   </div>
-  <div class="dim" style="font-size:10px; margin-top:4px;">Interest is shown for reference &mdash; it's already part of Costs, not an amount on top of it. Principal (${fmt$(costs.principal)}/mo) isn't counted as a cost either &mdash; it builds equity, not an expense &mdash; so actual cash flow after paying it is ${fmtSigned$(cf)}/mo.</div>`;
+  <div style="text-align:right; margin-top:2px;"><details class="footnote" style="margin:0; display:inline-block; position:relative;" onclick="event.stopPropagation()"><summary class="info-btn" style="width:16px; height:16px; font-size:9px;">&#9432;</summary><div class="footnote-body" style="position:absolute; bottom:100%; right:0; margin-bottom:6px; width:230px; background:var(--surface-3); border:1px solid var(--border); border-radius:12px; padding:10px 12px; z-index:20; font-size:11px; line-height:1.5; text-align:left; box-shadow:0 8px 24px rgba(0,0,0,.4);">Interest is shown for reference &mdash; it's already part of Costs, not an amount on top of it. Principal (${fmt$(costs.principal)}/mo) isn't counted as a cost either &mdash; it builds equity, not an expense &mdash; so actual cash flow after paying it is ${fmtSigned$(cf)}/mo.</div></details></div>`;
 }
 /* ---- Shared Revenue/Costs/Interest sections, inlined on the property's own detail page
    instead of separate sheets — every editable thing about a property lives on one page. ---- */
@@ -1934,6 +1956,24 @@ function renderSheet(){
   const s = state.sheet;
   if(s.type==='planner'){
     return renderPlannerSheet(s.id);
+  }
+  if(s.type==='appLockSetup'){
+    const pw1 = RAW['in-lock-new1']||'', pw2 = RAW['in-lock-new2']||'';
+    const mismatch = pw2.length>0 && pw1!==pw2;
+    const canSave = pw1.length>0 && pw1===pw2;
+    return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
+      <div class="sheet-handle"></div>
+      ${sheetHead('App Password', appLock_isSet()?'Change the password':'Set a password to hide this app until it&rsquo;s entered', false)}
+      <div class="dim" style="font-size:12px; margin-bottom:2px;">New password</div>
+      <div class="input-row"><input id="in-lock-new1" type="password" value="${pw1}" oninput="RAW['in-lock-new1']=this.value; render()" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:16px;font-weight:600;outline:none;width:100%;"/></div>
+      <div class="dim" style="font-size:12px; margin:10px 0 2px;">Confirm</div>
+      <div class="input-row"><input id="in-lock-new2" type="password" value="${pw2}" oninput="RAW['in-lock-new2']=this.value; render()" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:16px;font-weight:600;outline:none;width:100%;"/></div>
+      ${mismatch?`<div class="dim" style="font-size:11px; color:var(--danger); margin-top:6px;">Doesn&rsquo;t match yet.</div>`:''}
+      <div class="btn-row" style="margin-top:14px;">
+        <div class="btn btn-primary" style="${canSave?'':'opacity:.5; pointer-events:none;'}" onclick="lock_savePassword()">Save</div>
+      </div>
+      <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Stored only on this device, in this browser &mdash; not part of your data export, and not real security (nothing here is encrypted). It just keeps the app from sitting open on screen until this is typed in.</div></details>
+    </div></div>`;
   }
   if(s.type==='incomeAdjust'){
     const baseline = state.settings.monthlySpending||0;
@@ -3944,6 +3984,39 @@ function renderGoalsPlaceholder(){
 /* ============ SETTINGS ============ */
 function toggleSetting(key){ state.settings[key] = !state.settings[key]; render(); }
 function settings_setNumberStyle(v){ state.settings.numberStyle = v; render(); }
+/* App lock — a curtain, not a lock box. Stored on its own key (not inside the exported/
+   synced settings blob), plain text, no hashing: this is meant to keep the app from just
+   sitting open on screen, not to withstand anyone who actually tries. Never gates the
+   underlying data itself, only whether render() draws the real UI or the lock screen. */
+const APP_LOCK_KEY = 'finapp-lock-pin';
+function appLock_isSet(){ try{ return !!localStorage.getItem(APP_LOCK_KEY); }catch(e){ return false; } }
+function appLock_check(pw){ try{ return localStorage.getItem(APP_LOCK_KEY)===pw; }catch(e){ return false; } }
+function appLock_set(pw){ try{ localStorage.setItem(APP_LOCK_KEY, pw); }catch(e){} }
+function appLock_clear(){ try{ localStorage.removeItem(APP_LOCK_KEY); }catch(e){} }
+function lock_openSetup(){ openSheet({type:'appLockSetup'}); }
+function lock_savePassword(){
+  const pw1 = RAW['in-lock-new1']||'', pw2 = RAW['in-lock-new2']||'';
+  if(!pw1 || pw1!==pw2) return;
+  appLock_set(pw1);
+  delete RAW['in-lock-new1']; delete RAW['in-lock-new2'];
+  closeSheet();
+}
+function lock_removePassword(){
+  if(!confirm('Remove the app password? Anyone who opens this will see everything immediately, no prompt.')) return;
+  appLock_clear();
+  render();
+}
+function lock_tryUnlock(){
+  const pw = RAW['in-lock-pw']||'';
+  if(appLock_check(pw)){ state.locked=false; state.lockError=false; delete RAW['in-lock-pw']; render(); }
+  else { state.lockError=true; render(); }
+}
+function lock_forgot(){
+  if(!confirm('This clears only the saved app password — your financial data stays exactly as it is, nothing here touches that. Continue?')) return;
+  appLock_clear();
+  state.locked=false; state.lockError=false;
+  render();
+}
 function tax_toggleEnabled(){ state.settings.tax.enabled = !state.settings.tax.enabled; render(); }
 function tax_addBracket(){ state.settings.tax.fedBrackets.push({threshold:0, rate:0}); render(); }
 function tax_removeBracket(i){ state.settings.tax.fedBrackets.splice(i,1); render(); }
@@ -4016,6 +4089,9 @@ function renderSettings(){
         <button class="${s.numberStyle==='rounded'?'active':''}" onclick="settings_setNumberStyle('rounded')">Rounded</button>
         <button class="${s.numberStyle==='compact'?'active':''}" onclick="settings_setNumberStyle('compact')">Compact (K/M)</button>
       </div>
+      <div class="settings-row"><div><div class="l">App lock</div><div class="sub">${appLock_isSet()?'A password hides the app until it&rsquo;s entered':'Not set &mdash; the app opens straight to your data'}</div></div>
+        <button class="selectchip" onclick="lock_openSetup()">${appLock_isSet()?'Change':'Set password'}</button></div>
+      ${appLock_isSet()?`<div style="text-align:right; margin-top:-4px;"><span class="link" style="color:var(--danger); font-size:12px;" onclick="lock_removePassword()">Remove password</span></div>`:''}
       <div class="row-line" style="margin-top:4px;"><span class="l">Last synced</span><span class="v" style="font-family:var(--font-ui); font-weight:600; font-size:13px;">${state.lastSyncAt?fmtDateTime(state.lastSyncAt):'Never'}</span></div>
       <div class="row-line"><span class="l">Export data (.json)</span><button class="selectchip" onclick="exportData()">Export</button></div>
       <div class="row-line"><span class="l">Import data (.json)</span><button class="selectchip" onclick="triggerImport()">Import</button></div>
@@ -4207,6 +4283,10 @@ function fvmBalanceSeries(monthsCount, excludePropId, boostSpec, excludeFromIdx)
   // account's own balance directly, like a withdrawal, and never touches the pool at all.
   const taxFromProps = new Array(monthsCount).fill(0);
   const taxFromInvs = new Array(monthsCount).fill(0);
+  // Property/loan side and investment-interest side of growth[i], kept separate so the
+  // table can show a per-month property/investment split, not just today's snapshot.
+  const propSource = new Array(monthsCount);
+  const invSource = new Array(monthsCount);
   for(let i=0;i<monthsCount;i++){
     const date = addM(TODAY, i);
     if(i>0){
@@ -4284,6 +4364,8 @@ function fvmBalanceSeries(monthsCount, excludePropId, boostSpec, excludeFromIdx)
     const spending = effectiveSpendingAtDate(date, totalInterest);
     const pool = propLoan + totalInterest - spending;
     growth[i] = pool;
+    propSource[i] = propLoan;
+    invSource[i] = totalInterest;
     if(i>0 && targets.length){
       const clampedPool = Math.max(0, pool);
       const fixedTargets = targets.filter(t=> t.recurring.startDate<=mkey(date)+'-01' && t.recurring.growthShare.mode==='fixed');
@@ -4305,7 +4387,7 @@ function fvmBalanceSeries(monthsCount, excludePropId, boostSpec, excludeFromIdx)
       bals[inv.id] += bals[inv.id]*(inv.rate||0)/100/12;
     });
   }
-  return { balances: result, growth, interestByInv, taxFromProps, taxFromInvs };
+  return { balances: result, growth, interestByInv, taxFromProps, taxFromInvs, propSource, invSource };
 }
 /* Boosts (or drains) one account at a chosen month — today by default — and optionally excludes
    a sold property's cash flow from the shared pool, then returns every account's series at once.
@@ -4342,7 +4424,7 @@ function fvmBuildColumns(){
   }));
   const gt = new Array(FVM_MONTHS).fill(0);
   cols.forEach(c=>{ for(let i=0;i<FVM_MONTHS;i++) gt[i]+=c.series[i]; });
-  return { cols, gtSeries: gt, growthSeries: series.growth };
+  return { cols, gtSeries: gt, growthSeries: series.growth, growthPropSeries: series.propSource, growthInvSeries: series.invSource };
 }
 /* "How did we get this number" breakdowns — reused from FVM's table cells, FVM/Income's
    shared header stats, and appended to the existing Growth sheet. Total/Growth breakdowns
@@ -4528,7 +4610,7 @@ function renderFVM(){
   const sourcesToday = incomeSources();
   const totalMonthly = sourcesToday.reduce((s,x)=>s+x.amount,0);
   const lump = fvmEffectiveLump();
-  const {cols, gtSeries, growthSeries} = fvmBuildColumns();
+  const {cols, gtSeries, growthSeries, growthPropSeries, growthInvSeries} = fvmBuildColumns();
   const totalInvBalance = investments.filter(i=>i.committed!==false).reduce((s,i)=>s+(i.balance||0),0);
   const spendingToday = effectiveSpendingAtDate(TODAY);
   const growthToday = totalMonthly - spendingToday;
@@ -4580,9 +4662,10 @@ function renderFVM(){
       const date = addM(TODAY, i);
       const dateStr = mkey(date)+'-01';
       const g = growthSeries[i];
+      const gs = splitGrowthByIncome(g, growthPropSeries[i], growthInvSeries[i]);
       return `<tr id="fvmrow-${i}" class="${timelineRowClass(i, FVM_MONTHS)}">
         <td style="cursor:pointer;" onclick="timelineHighlightDate('${mkey(date)}')">${fmtMonth(date)}</td>
-        <td style="cursor:pointer; color:${g>=0?'var(--principal)':'var(--interest)'};" onclick="fvm_showBreakdown('growth','${dateStr}')">${fmtSigned$(g)}</td>
+        <td style="cursor:pointer; color:${g>=0?'var(--principal)':'var(--interest)'};" onclick="fvm_showBreakdown('growth','${dateStr}')">${fmt$(gs.prop)}/${fmt$(gs.inv)}</td>
         <td style="cursor:pointer; ${f.selectedCol==='gt'?'font-weight:700; color:var(--principal);':''}" onclick="fvm_showBreakdown('total','${dateStr}')">${fmt$(gtSeries[i])}</td>
         ${cols.map(c=>`<td style="cursor:pointer; ${c.id===f.selectedCol?'font-weight:700; color:var(--principal);':''}" onclick="inv_openCellAction('${c.id}','${dateStr}')">${fmt$(c.series[i])}</td>`).join('')}
       </tr>`;
@@ -4594,6 +4677,7 @@ function renderFVM(){
 }
 
 loadLocalData();
+state.locked = appLock_isSet();
 render();
 // Rotating the phone doesn't touch app state, so nothing would otherwise trigger a re-render
 // to recompute the timeline table's max-height against the newly available screen space.
