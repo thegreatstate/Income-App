@@ -521,7 +521,15 @@ function spend_runImport(mode){
   delete RAW['in-spend-import-text'];
   closeSheet();
 }
-function spendTodayISO(){ const d=new Date(); return d.toISOString().slice(0,10); }
+// Local calendar-date string (Y-M-D) from a timestamp — deliberately NOT toISOString(),
+// which converts to UTC and can land on the wrong calendar day depending on timezone
+// (e.g. entering a transaction in the evening, Mountain Time, could otherwise date it
+// tomorrow).
+function spendLocalDateStr(ms){
+  const d = new Date(ms);
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function spendTodayISO(){ return spendLocalDateStr(Date.now()); }
 function spendFmtDate(iso){
   const d = new Date(iso+'T00:00:00');
   return d.toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
@@ -531,13 +539,31 @@ const SPEND_FREQ_LABELS = { weekly:'Weekly', biweekly:'Biweekly', monthly:'Month
    transaction for every occurrence now due. Idempotent (checks recurringId+recurringOcc
    before inserting), so calling this repeatedly — every time the Spend view renders — never
    double-posts. No live heartbeat needed since there's no fast test-frequency to watch post. */
-function spendRuleStartMs(rule){ return new Date(rule.firstDate).getTime(); }
+// "T00:00:00" (no Z) forces local-time parsing — a bare new Date("2026-01-31") parses as
+// UTC midnight, which in any timezone behind UTC (all of the Americas) lands on the previous
+// local day, throwing every date-math step that follows off by one.
+function spendRuleStartMs(rule){ return new Date(rule.firstDate+'T00:00:00').getTime(); }
 function spendAddFreqMs(ms, freq){
   const d = new Date(ms);
   if(freq==='weekly') d.setDate(d.getDate()+7);
   else if(freq==='biweekly') d.setDate(d.getDate()+14);
-  else if(freq==='monthly') d.setMonth(d.getMonth()+1);
-  else if(freq==='yearly') d.setFullYear(d.getFullYear()+1);
+  else if(freq==='monthly'){
+    // A rule anchored on the 31st would otherwise roll into the next month once it
+    // hits a shorter one (Jan 31 -> "Feb 31" -> Mar 3) and drift permanently off its
+    // intended day. Clamp to the target month's actual last day instead.
+    const day = d.getDate();
+    d.setDate(1);
+    d.setMonth(d.getMonth()+1);
+    d.setDate(Math.min(day, new Date(d.getFullYear(), d.getMonth()+1, 0).getDate()));
+  }
+  else if(freq==='yearly'){
+    // Same issue for Feb 29 on a non-leap year.
+    const day = d.getDate(), month = d.getMonth();
+    d.setDate(1);
+    d.setFullYear(d.getFullYear()+1);
+    d.setMonth(month);
+    d.setDate(Math.min(day, new Date(d.getFullYear(), month+1, 0).getDate()));
+  }
   return d.getTime();
 }
 function spendNextOccurrenceMs(rule){
@@ -547,7 +573,7 @@ function spendNextOccurrenceMs(rule){
   while(ms<=nowMs && guard<2000){ ms=spendAddFreqMs(ms, rule.frequency); guard++; }
   return ms;
 }
-function spendFmtNextOccurrence(rule){ return spendFmtDate(new Date(spendNextOccurrenceMs(rule)).toISOString().slice(0,10)); }
+function spendFmtNextOccurrence(rule){ return spendFmtDate(spendLocalDateStr(spendNextOccurrenceMs(rule))); }
 function spendMaterializeRecurring(){
   const nowMs = Date.now();
   let changed = false;
@@ -556,11 +582,14 @@ function spendMaterializeRecurring(){
       let occMs = spendRuleStartMs(rule);
       let guard = 0;
       while(occMs <= nowMs && guard < 2000){
-        const occKey = new Date(occMs).toISOString();
-        const exists = acct.transactions.some(tx=>tx.recurringId===rule.id && tx.recurringOcc===occKey);
+        const occKey = spendLocalDateStr(occMs);
+        // Compare by calendar day, not exact string, so this still matches
+        // occurrences already posted before this date-math fix (which stored a full
+        // ISO timestamp) instead of silently duplicating every existing occurrence.
+        const exists = acct.transactions.some(tx=>tx.recurringId===rule.id && (tx.recurringOcc||'').slice(0,10)===occKey);
         if(!exists){
           acct.transactions.push({
-            id:spendUid(), date:occKey.slice(0,10), description:rule.description,
+            id:spendUid(), date:occKey, description:rule.description,
             amount: rule.type==='deposit' ? rule.amount : -rule.amount,
             recurringId:rule.id, recurringOcc:occKey
           });
