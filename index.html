@@ -486,7 +486,21 @@ function spendParseImportText(text){
   }
   return {transactions, skipped};
 }
-function spend_openImport(acctId){ openSheet({ type:'spendImport', acctId, text:'' }); }
+function spend_openImport(){
+  const defaultAcct = spendAccounts.length===1 ? spendAccounts[0].id : null;
+  openSheet({ type:'spendImport', acctId: defaultAcct, text:'' });
+}
+function spend_setImportAccount(id){ state.sheet.acctId = id; render(); }
+function spend_toggleImportVisible(){ state.settings.spend.importVisible = !state.settings.spend.importVisible; saveLocalData(); render(); }
+function spendTriggerImportFile(){ const el=document.getElementById('spendImportFileInput'); if(el) el.click(); }
+function spend_handleImportFile(input){
+  const file = input.files && input.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e){ RAW['in-spend-import-text'] = e.target.result; render(); };
+  reader.readAsText(file);
+  input.value = '';
+}
 function spend_runImport(mode){
   const s = state.sheet;
   const acct = spendGetAccount(s.acctId);
@@ -1371,7 +1385,8 @@ const state = { tab:'fvm', pushed:null, sheet:null, sheetEdit:false, propEdit:fa
   settings:{ showCents:false, weightedYears:true, monthlySpending:9000, spendingPctOfInterest:10, privacyMode:false, numberStyle:'compact',
     tax:{ enabled:false, mode:'auto', manualQuarterlyAmount:0,
       fedBrackets:[ {threshold:0, rate:10}, {threshold:23200, rate:12}, {threshold:94300, rate:22}, {threshold:201050, rate:24} ],
-      stateKey:'MT', stateRate:5, otherIncome:0, otherQualifiedIncome:0, useNIIT:true, bracketInflationPct:2.5, dueMonths:[4,6,9,1] } },
+      stateKey:'MT', stateRate:5, otherIncome:0, otherQualifiedIncome:0, useNIIT:true, bracketInflationPct:2.5, dueMonths:[4,6,9,1] },
+    spend:{ importVisible:true } },
   settingsOpen:{ general:true, pm:false, defaults:false, rates:false, events:false, estTax:false },
   portfolioAnalyzerOpen:false,
   spendCompare:{ a:null, b:null },
@@ -1456,6 +1471,8 @@ function handleImportFile(input){
       if(Array.isArray(data.analyzerSamples)) analyzerSamples.splice(0, analyzerSamples.length, ...data.analyzerSamples);
       if(Array.isArray(data.standaloneLoans)) standaloneLoans.splice(0, standaloneLoans.length, ...data.standaloneLoans);
       if(Array.isArray(data.householdSpendingOverrides)) householdSpendingOverrides.splice(0, householdSpendingOverrides.length, ...data.householdSpendingOverrides);
+      if(Array.isArray(data.spendAccounts)) spendAccounts.splice(0, spendAccounts.length, ...data.spendAccounts);
+      if(Array.isArray(data.spendCategories) && data.spendCategories.length) spendCategories.splice(0, spendCategories.length, ...data.spendCategories);
       if(data.settings) Object.assign(state.settings, data.settings);
       state.lastSyncAt = data.exportedAt || new Date().toISOString();
       for(const k in SCHED) delete SCHED[k];
@@ -2343,6 +2360,22 @@ function renderSheet(){
     </div></div>`;
   }
   if(s.type==='spendImport'){
+    if(!spendAccounts.length){
+      return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
+        <div class="sheet-handle"></div>
+        ${sheetHead('Import Transactions', '', false)}
+        <div class="dim" style="font-size:13px;">Add an account first, then come back here.</div>
+      </div></div>`;
+    }
+    if(!s.acctId){
+      return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
+        <div class="sheet-handle"></div>
+        ${sheetHead('Import Transactions', 'Which account?', false)}
+        <div class="sort-row" style="margin-top:2px;">
+          ${spendAccounts.map(a=>`<div class="chip" onclick="spend_setImportAccount('${a.id}')">${a.name}</div>`).join('')}
+        </div>
+      </div></div>`;
+    }
     const acct = spendGetAccount(s.acctId);
     const text = rv('in-spend-import-text', s.text);
     const parsed = spendParseImportText(text);
@@ -2355,8 +2388,13 @@ function renderSheet(){
     return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet full">
       <div class="sheet-handle"></div>
       ${sheetHead('Import Transactions', acct.name, false)}
-      <div class="dim" style="font-size:12px; margin-bottom:4px;">Paste the exported data below (Date / Description / Outgoing / Income columns, header row included). One-time thing &mdash; from here on it just lives in this account.</div>
-      <textarea id="in-spend-import-text" placeholder="Paste here&hellip;" oninput="RAW['in-spend-import-text']=this.value; render()" style="width:100%; min-height:130px; background:var(--surface-3); border:1px solid var(--border); border-radius:10px; padding:10px 12px; color:var(--text); font-family:var(--font-mono); font-size:11.5px; resize:vertical;">${text}</textarea>
+      ${spendAccounts.length>1?`<div style="text-align:right; margin-top:-10px; margin-bottom:8px;"><span class="link" style="font-size:12px;" onclick="state.sheet.acctId=null; render()">Change account &rsaquo;</span></div>`:''}
+      <input id="spendImportFileInput" type="file" accept=".csv,.txt,text/csv,text/plain" style="display:none" onchange="spend_handleImportFile(this)"/>
+      <div class="btn-row">
+        <div class="btn btn-primary" onclick="spendTriggerImportFile()">Choose File&hellip;</div>
+      </div>
+      <div class="dim" style="font-size:11px; text-align:center; margin:10px 0;">or paste it instead</div>
+      <textarea id="in-spend-import-text" placeholder="Paste here&hellip;" oninput="RAW['in-spend-import-text']=this.value; render()" style="width:100%; min-height:100px; background:var(--surface-3); border:1px solid var(--border); border-radius:10px; padding:10px 12px; color:var(--text); font-family:var(--font-mono); font-size:11.5px; resize:vertical;">${text}</textarea>
       ${n>0 ? `
       <div class="card" style="margin-top:12px;">
         <div class="row-line"><span class="l">Transactions found</span><span class="v">${n}${parsed.skipped?` <span class="faint">(${parsed.skipped} skipped)</span>`:''}</span></div>
@@ -2368,7 +2406,7 @@ function renderSheet(){
         <div class="btn btn-primary" onclick="spend_runImport('append')">Add ${n} to existing</div>
       </div>
       ${currentCount>0?`<div style="text-align:center; margin-top:10px;"><span class="link" style="color:var(--danger); font-size:12.5px;" onclick="if(confirm('This deletes all '+${currentCount}+' existing transactions in ${acct.name.replace(/'/g,"\\'")} first, then imports these '+${n}+'. Cannot be undone. Continue?')) spend_runImport('replace')">Replace all ${currentCount} existing transactions instead</span></div>`:''}
-      ` : (text.trim() ? `<div class="dim" style="font-size:12px; margin-top:10px; color:var(--danger);">Couldn&rsquo;t find any valid transaction rows in that &mdash; check it&rsquo;s pasted in full, header row included.</div>` : '')}
+      ` : (text.trim() ? `<div class="dim" style="font-size:12px; margin-top:10px; color:var(--danger);">Couldn&rsquo;t find any valid transaction rows in that &mdash; check it&rsquo;s pasted/loaded in full, header row included.</div>` : '')}
     </div></div>`;
   }
   if(s.type==='incomeAdjust'){
@@ -5053,7 +5091,6 @@ function renderSpendDetail(){
   ${(acct.recurring||[]).length ? `<div class="section-label">Recurring</div>${recurRows}` : ''}
   <div class="section-label">Transactions</div>
   ${txs.length ? `<div class="card">${txRows}</div>` : `<div class="dim" style="font-size:13px;">No transactions yet.</div>`}
-  <div style="text-align:right; margin-top:10px;"><span class="link" style="font-size:12px;" onclick="spend_openImport('${acct.id}')">Import transactions &rsaquo;</span></div>
   <div style="height:6px;"></div>
   `;
 }
@@ -5065,6 +5102,12 @@ function renderSpendSettings(){
   <div class="row-line" style="cursor:pointer;" onclick="state.spendNav.screen='accounts'; render()"><span class="l">Accounts</span><span class="v" style="color:var(--text-dim); font-weight:400;">${spendAccounts.length} &rsaquo;</span></div>
   <div class="row-line" style="cursor:pointer;" onclick="state.spendNav.screen='categories'; render()"><span class="l">Categories</span><span class="v" style="color:var(--text-dim); font-weight:400;">${spendCategories.length} &rsaquo;</span></div>
   <div class="dim" style="font-size:10.5px; margin-top:12px;">Spending accounts, transactions, and categories are included in FinApp's own Export/Import and Reset in the main Settings &mdash; nothing separate to back up here.</div>
+  <div class="section-label" style="margin-top:18px;">One-time setup</div>
+  <div class="settings-row">
+    <div><div class="l" style="font-size:13.5px;">Show import transactions</div><div class="sub">Bring in history from another app &mdash; turn off once you're done with it</div></div>
+    <div class="toggle ${state.settings.spend.importVisible?'on':''}" onclick="spend_toggleImportVisible()"><div class="knob"></div></div>
+  </div>
+  ${state.settings.spend.importVisible?`<div class="row-line"><span class="l">Import transactions</span><button class="selectchip" onclick="spend_openImport()">Open</button></div>`:''}
   <button class="reset-btn" style="width:100%; margin-top:22px; background:var(--surface-3); border:1px solid var(--border); color:var(--danger); font-weight:600; font-size:15px; padding:13px; border-radius:13px; cursor:pointer;" onclick="spend_resetAllData()">Reset Spending Data</button>
   `;
 }
