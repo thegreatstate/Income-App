@@ -428,7 +428,7 @@ const spendCategories = spendSeedCategories();
 function spendBalanceOf(acct){ return acct.transactions.reduce((s,t)=>s+t.amount,0); }
 function spendTotalBalance(){ return spendAccounts.reduce((s,a)=>s+spendBalanceOf(a),0); }
 function spendGetAccount(id){ return spendAccounts.find(a=>a.id===id); }
-function spendCategoryName(id){ const c=spendCategories.find(c=>c.id===id); return c?c.name:''; }
+function spendCategoryName(id){ const c=spendCategories.find(c=>c.id===id); return c?escHtml(c.name):''; }
 /* Deliberately bypasses fmt$'s privacy/rounding settings — an envelope balance is only
    useful if it's exact ($250 shown as "$300" under Compact mode would defeat the point of
    tracking it at all), so Spend always shows precise dollar amounts regardless of the rest
@@ -1000,7 +1000,7 @@ function findInvestment(id){ return investments.find(i=>i.id===id); }
    same letter, so a walkthrough stays coherent) without touching the underlying data at
    all — flip the toggle back off and everything reads exactly as it did before. */
 function displayName(obj){
-  if(!state.settings.privacyMode || !obj) return obj ? obj.name : '';
+  if(!state.settings.privacyMode || !obj) return obj ? escHtml(obj.name) : '';
   const pi = properties.indexOf(obj);
   if(pi>=0) return 'Property '+String.fromCharCode(65+(pi%26));
   const ii = investments.indexOf(obj);
@@ -1016,15 +1016,16 @@ function displayName(obj){
     const li = loanIds.indexOf(obj.id);
     if(li>=0) return 'Loan '+String.fromCharCode(65+(li%26));
   }
-  return obj.name;
+  return escHtml(obj.name);
 }
 /* Transfer events store the other side's name as a plain string at the moment they're
    recorded (not an id) — real history, so it must never be rewritten. This only swaps
    the label shown for it at render time, same as everywhere else privacy mode touches. */
 function displayLinkedName(name){
-  if(!name || !state.settings.privacyMode) return name;
+  if(!name) return '';
+  if(!state.settings.privacyMode) return escHtml(name);
   const inv = investments.find(iv=>iv.name===name);
-  return inv ? displayName(inv) : name;
+  return inv ? displayName(inv) : escHtml(name);
 }
 function invEventSign(type){ return (type==='deposit'||type==='transfer_in') ? 1 : -1; }
 /* Future-dated events (planned or locked-in) aren't reflected in inv.balance yet —
@@ -1515,6 +1516,15 @@ function handleImportFile(input){
 }
 
 function numFrom(v){ return Number(String(v).replace(/[^0-9.\-]/g,''))||0; }
+/* Escapes free-text fields (names, descriptions, notes, types) before they land in an
+   innerHTML template — everything here is entered by the household, but an imported
+   JSON/CSV file is untrusted input, and unescaped text lets something like an <img
+   onerror=...> tag execute in the page. Use anywhere user-typed text is interpolated
+   into markup; never needed for numbers, ids, or values already run through fmt$/etc. */
+function escHtml(s){
+  if(s===null || s===undefined) return '';
+  return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
 /* Two ways to coarsen a displayed number — used automatically by privacy mode, and
    independently pickable on its own (Settings &rsaquo; Rounded numbers) for anyone who
    just wants less precision day to day. Neither ever touches anything underlying.
@@ -1847,7 +1857,7 @@ function renderPL(){
     <div class="card" style="cursor:pointer;" onclick="opportunity_show()">
       ${top ? `
       <div class="dim" style="font-size:12.5px;">${top.kind==='loan'?'Pay down':'Add to'}</div>
-      <div class="big-number" style="margin-top:2px; font-size:22px;">${top.name}</div>
+      <div class="big-number" style="margin-top:2px; font-size:22px;">${escHtml(top.name)}</div>
       <div class="dim" style="font-size:11.5px; margin-top:4px;">${fmtPct(top.rate)} ${top.kind==='loan'?'guaranteed return':'current rate'} &mdash; the best of everything ranked</div>
       ` : `<div class="dim" style="font-size:13px;">No loans or investments to rank yet.</div>`}
       <div style="text-align:right; margin-top:8px;"><span class="link" style="font-size:12.5px;">See full ranking &rsaquo;</span></div>
@@ -1926,7 +1936,7 @@ function renderPropCard(prop){
     <div class="prop-top">
       <div>
         <div class="prop-name">${displayName(prop)}</div>
-        <div class="prop-sub">${prop.type}</div>
+        <div class="prop-sub">${escHtml(prop.type)}</div>
       </div>
       <div style="text-align:right;">
         <div class="prop-balance">${fmt$(c.balance)}</div>
@@ -1939,7 +1949,7 @@ function renderPropCard(prop){
       <div class="metric principal"><div class="v">${fmt$(c.principal)}</div><div class="l">Principal/mo</div></div>
       <div class="metric ip"><div class="v">${fmtRatio(c.ip)}</div><div class="l">I/P ratio</div></div>
     </div>
-    ${otherBal>0? `<div class="dim" style="font-size:11px; margin-top:10px;">+ ${fmt$(otherBal)} in remodel loans (${prop.otherLoans.map(l=>l.label.split(' note')[0]).join(', ')}) &middot; counted in total debt, not this I/P</div>`:''}
+    ${otherBal>0? `<div class="dim" style="font-size:11px; margin-top:10px;">+ ${fmt$(otherBal)} in remodel loans (${prop.otherLoans.map(l=>escHtml(l.label.split(' note')[0])).join(', ')}) &middot; counted in total debt, not this I/P</div>`:''}
     ${linkGridRow(prop, cf)}
   </div>`;
 }
@@ -2245,7 +2255,7 @@ function unitVacancy_setRecurring(propId, idx, vacId, recurring){
 function unitRow(propId, u, idx, editing){
   const increases = (u.increases||[]).slice().sort((a,b)=>parseD(a.date)-parseD(b.date));
   const vacancies = (u.vacancies||[]).slice().sort((a,b)=>parseD(a.start)-parseD(b.start));
-  const label = `${u.label}${u.beds?` &middot; ${u.beds}bd`:''}`;
+  const label = `${escHtml(u.label)}${u.beds?` &middot; ${u.beds}bd`:''}`;
   if(!editing){
     return `<div class="row-line"><span class="l">${label}</span><span class="v">${fmt$(u.rent)}/mo</span></div>
     ${increases.map(inc=>`<div class="dim" style="font-size:11px; margin:-2px 0 4px; padding-left:2px;">+${inc.pct}%${inc.recurring?' every year':''} starting ${fmtMonth(parseD(inc.date))}</div>`).join('')}
@@ -2319,7 +2329,7 @@ function renderSheet(){
     return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
       <div class="sheet-handle"></div>
       ${sheetHead(editing?'Edit Account':'New Account', '', false)}
-      <div class="input-row"><input id="in-spend-acct-name" type="text" placeholder="Account name" value="${rv('in-spend-acct-name', s.name)}" oninput="RAW['in-spend-acct-name']=this.value; render()" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:16px;font-weight:600;outline:none;width:100%;"/></div>
+      <div class="input-row"><input id="in-spend-acct-name" type="text" placeholder="Account name" value="${escHtml(rv('in-spend-acct-name', s.name))}" oninput="RAW['in-spend-acct-name']=this.value; render()" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:16px;font-weight:600;outline:none;width:100%;"/></div>
       ${!editing ? `
       <div class="dim" style="font-size:12px; margin:12px 0 2px;">Starting balance</div>
       <div class="input-row"><span class="suffix">$</span><input id="in-spend-acct-amt" type="text" inputmode="decimal" value="${rv('in-spend-acct-amt', s.amount)}" oninput="RAW['in-spend-acct-amt']=this.value; render()"/></div>
@@ -2343,7 +2353,7 @@ function renderSheet(){
       <div class="sheet-handle"></div>
       ${sheetHead(s.editId?'Edit Transaction':(s.kind==='deposit'?'Add Deposit':'Add Withdrawal'), '', false)}
       <div class="dim" style="font-size:12px; margin-bottom:2px;">Description</div>
-      <div class="input-row"><input id="in-spend-tx-desc" type="text" placeholder="${s.kind==='deposit'?'Deposit':'Withdrawal'}" value="${rv('in-spend-tx-desc', s.description)}" oninput="RAW['in-spend-tx-desc']=this.value; render()" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:16px;font-weight:600;outline:none;width:100%;"/></div>
+      <div class="input-row"><input id="in-spend-tx-desc" type="text" placeholder="${s.kind==='deposit'?'Deposit':'Withdrawal'}" value="${escHtml(rv('in-spend-tx-desc', s.description))}" oninput="RAW['in-spend-tx-desc']=this.value; render()" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:16px;font-weight:600;outline:none;width:100%;"/></div>
       <div class="dim" style="font-size:12px; margin:12px 0 2px;">Amount</div>
       <div class="input-row"><span class="suffix">$</span><input id="in-spend-tx-amt" type="text" inputmode="decimal" value="${rv('in-spend-tx-amt', s.amount)}" oninput="RAW['in-spend-tx-amt']=this.value; render()"/></div>
       <div class="dim" style="font-size:12px; margin:12px 0 2px;">Category</div>
@@ -2351,7 +2361,7 @@ function renderSheet(){
       ${s.categoryPickerOpen ? `
       <div class="card" style="margin-top:8px; padding:6px 0;">
         <div class="row-line" style="cursor:pointer; ${!s.category?'color:var(--accent); font-weight:700;':''}" onclick="spend_pickCategory('')"><span class="l">No Category</span></div>
-        ${enabledCats.map(c=>`<div class="row-line" style="cursor:pointer; ${s.category===c.id?'color:var(--accent); font-weight:700;':''}" onclick="spend_pickCategory('${c.id}')"><span class="l">${c.name}${!c.enabled?' <span class="faint">(hidden)</span>':''}</span></div>`).join('')}
+        ${enabledCats.map(c=>`<div class="row-line" style="cursor:pointer; ${s.category===c.id?'color:var(--accent); font-weight:700;':''}" onclick="spend_pickCategory('${c.id}')"><span class="l">${escHtml(c.name)}${!c.enabled?' <span class="faint">(hidden)</span>':''}</span></div>`).join('')}
         <div style="text-align:right; padding:8px 4px 0;"><span class="link" style="font-size:12px;" onclick="state.sheet=null; state.spendNav.screen='categories'; push({type:'spend'})">Manage categories &rsaquo;</span></div>
       </div>` : ''}
       <div class="btn-row" style="margin-top:14px;">
@@ -2368,7 +2378,7 @@ function renderSheet(){
     return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
       <div class="sheet-handle"></div>
       ${sheetHead(s.editId?'Edit Category':'New Category', '', false)}
-      <div class="input-row"><input id="in-spend-cat-name" type="text" placeholder="Category name" value="${rv('in-spend-cat-name', s.name)}" oninput="RAW['in-spend-cat-name']=this.value; render()" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:16px;font-weight:600;outline:none;width:100%;"/></div>
+      <div class="input-row"><input id="in-spend-cat-name" type="text" placeholder="Category name" value="${escHtml(rv('in-spend-cat-name', s.name))}" oninput="RAW['in-spend-cat-name']=this.value; render()" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:16px;font-weight:600;outline:none;width:100%;"/></div>
       <div class="btn-row" style="margin-top:14px;">
         <div class="btn btn-primary" style="${canSave?'':'opacity:.5; pointer-events:none;'}" onclick="spend_saveCategoryForm()">${s.editId?'Save':'Add'}</div>
       </div>
@@ -2380,7 +2390,7 @@ function renderSheet(){
       <div class="sheet-handle"></div>
       ${sheetHead(s.editId?'Edit Recurring':'Recurring Transaction', '', false)}
       <div class="dim" style="font-size:12px; margin-bottom:2px;">Description</div>
-      <div class="input-row"><input id="in-spend-recur-desc" type="text" value="${rv('in-spend-recur-desc', s.description)}" oninput="RAW['in-spend-recur-desc']=this.value; render()" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:16px;font-weight:600;outline:none;width:100%;"/></div>
+      <div class="input-row"><input id="in-spend-recur-desc" type="text" value="${escHtml(rv('in-spend-recur-desc', s.description))}" oninput="RAW['in-spend-recur-desc']=this.value; render()" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:16px;font-weight:600;outline:none;width:100%;"/></div>
       <div class="dim" style="font-size:12px; margin:12px 0 2px;">Amount</div>
       <div class="input-row"><span class="suffix">$</span><input id="in-spend-recur-amt" type="text" inputmode="decimal" value="${rv('in-spend-recur-amt', s.amount)}" oninput="RAW['in-spend-recur-amt']=this.value; render()"/></div>
       <div class="dim" style="font-size:12px; margin:12px 0 2px;">Frequency</div>
@@ -2416,7 +2426,7 @@ function renderSheet(){
         <div class="sheet-handle"></div>
         ${sheetHead('Import Transactions', 'Which account?', false)}
         <div class="sort-row" style="margin-top:2px;">
-          ${spendAccounts.map(a=>`<div class="chip" onclick="spend_setImportAccount('${a.id}')">${a.name}</div>`).join('')}
+          ${spendAccounts.map(a=>`<div class="chip" onclick="spend_setImportAccount('${a.id}')">${escHtml(a.name)}</div>`).join('')}
         </div>
       </div></div>`;
     }
@@ -2445,7 +2455,7 @@ function renderSheet(){
         <div class="row-line"><span class="l">Date range</span><span class="v" style="font-weight:400;">${dateRange}</span></div>
         <div class="row-line"><span class="l">Net total</span><span class="v" style="color:${netTotal>=0?'var(--principal)':'var(--interest)'};">${spendFmtSigned$(netTotal)}</span></div>
       </div>
-      <div class="dim" style="font-size:11px; margin-top:10px;">${acct.name} currently has ${currentCount} transaction${currentCount===1?'':'s'} totaling ${spendFmt$(currentBal)}.</div>
+      <div class="dim" style="font-size:11px; margin-top:10px;">${escHtml(acct.name)} currently has ${currentCount} transaction${currentCount===1?'':'s'} totaling ${spendFmt$(currentBal)}.</div>
       <div class="btn-row" style="margin-top:14px;">
         <div class="btn btn-primary" onclick="spend_runImport('append')">Add ${n} to existing</div>
       </div>
@@ -2536,7 +2546,7 @@ function renderSheet(){
     const isIncome = ['rent','lease','invReturn'].includes(category);
     const color = category==='mortgagePrincipal' ? 'var(--text-dim)' : isIncome ? 'var(--principal)' : 'var(--interest)';
     const rows = plBreakdownRows(category).filter(r=>Math.abs(r.amount)>0.5);
-    const rowsHtml = rows.length ? rows.map(r=>`<div class="row-line"><span class="l">${r.name}</span><span class="v" style="color:${color};">${fmt$(r.amount)}</span></div>`).join('') : `<div class="dim" style="font-size:12.5px;">Nothing to show.</div>`;
+    const rowsHtml = rows.length ? rows.map(r=>`<div class="row-line"><span class="l">${escHtml(r.name)}</span><span class="v" style="color:${color};">${fmt$(r.amount)}</span></div>`).join('') : `<div class="dim" style="font-size:12.5px;">Nothing to show.</div>`;
     return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
       <div class="sheet-handle"></div>
       ${sheetHead(PL_TITLES[category]||category, fmtMonth(TODAY), false)}
@@ -2554,7 +2564,7 @@ function renderSheet(){
       const onclick = isLoan ? `closeSheet(); push({type:'loan', id:'${c.id}'})` : `closeSheet(); push({type:'investment', id:'${c.id}'})`;
       return `<div class="list-card" onclick="${onclick}">
         <div class="prop-top">
-          <div><div class="prop-name" style="font-size:14px;">${i+1}. ${c.name}</div><div class="prop-sub">${action} &middot; ${detail}</div></div>
+          <div><div class="prop-name" style="font-size:14px;">${i+1}. ${escHtml(c.name)}</div><div class="prop-sub">${action} &middot; ${detail}</div></div>
           <div style="text-align:right;"><div class="prop-balance" style="font-size:15px;">${fmtPct(c.rate)}</div></div>
         </div>
         ${flag}
@@ -2562,7 +2572,7 @@ function renderSheet(){
     }).join('');
     const losingHtml = losingProps.map(p=>`<div class="list-card" onclick="closeSheet(); fvm_previewSale('${p.id}')">
       <div class="prop-top">
-        <div><div class="prop-name" style="font-size:14px;">${p.name}</div><div class="prop-sub">Losing ${fmtSigned$(p.cashFlow)}/mo</div></div>
+        <div><div class="prop-name" style="font-size:14px;">${escHtml(p.name)}</div><div class="prop-sub">Losing ${fmtSigned$(p.cashFlow)}/mo</div></div>
         <span class="link" style="font-size:12px;">Preview selling &rsaquo;</span>
       </div>
     </div>`).join('');
@@ -2577,8 +2587,8 @@ function renderSheet(){
     const nw = netWorthTotals();
     const rows = properties.map(p=>({ name: displayName(p), amount: propertyEquity(p) }));
     const rowsHtml = rows.map(r=> r.amount==null
-      ? `<div class="row-line"><span class="l">${r.name}</span><span class="v dim" style="font-size:12px;">No value set</span></div>`
-      : `<div class="row-line"><span class="l">${r.name}</span><span class="v" style="color:${r.amount>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(r.amount)}</span></div>`
+      ? `<div class="row-line"><span class="l">${escHtml(r.name)}</span><span class="v dim" style="font-size:12px;">No value set</span></div>`
+      : `<div class="row-line"><span class="l">${escHtml(r.name)}</span><span class="v" style="color:${r.amount>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(r.amount)}</span></div>`
     ).join('');
     return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
       <div class="sheet-handle"></div>
@@ -2608,7 +2618,7 @@ function renderSheet(){
     };
     const colorMap = {balance:'var(--text)', interest:'var(--interest)', principal:'var(--principal)', ip:'var(--accent)'};
     const rows = portfolioBreakdownRows(kind).filter(r=> kind==='ip' ? true : r.amount>0.5);
-    const rowsHtml = rows.length ? rows.map(r=>`<div class="row-line"><span class="l">${r.name}</span><span class="v" style="color:${colorMap[kind]};">${kind==='ip'?fmtRatio(r.amount):fmt$(r.amount)}</span></div>`).join('') : `<div class="dim" style="font-size:12.5px;">Nothing to show.</div>`;
+    const rowsHtml = rows.length ? rows.map(r=>`<div class="row-line"><span class="l">${escHtml(r.name)}</span><span class="v" style="color:${colorMap[kind]};">${kind==='ip'?fmtRatio(r.amount):fmt$(r.amount)}</span></div>`).join('') : `<div class="dim" style="font-size:12.5px;">Nothing to show.</div>`;
     const totalVal = kind==='balance'?fmt$(tot.balance) : kind==='interest'?fmt$(tot.interest) : kind==='principal'?fmt$(tot.principal) : fmtRatio(tot.ip);
     return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
       <div class="sheet-handle"></div>
@@ -2881,7 +2891,7 @@ function renderStandaloneLoanDraft(id){
   <div class="header-sticky"><button class="back" onclick="loan_delete('${id}')">&lsaquo; ${backLabel()}</button></div>
   <div class="card" style="padding:14px 16px;">
     <div class="dim" style="font-size:12px; margin-bottom:2px;">Name</div>
-    <input id="in-sl-label" type="text" value="${l.label}" placeholder="e.g. Personal Loan" oninput="loan_set('${id}','label',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-ui); font-size:18px; font-weight:700; outline:none; width:100%; margin-bottom:12px;"/>
+    <input id="in-sl-label" type="text" value="${escHtml(l.label)}" placeholder="e.g. Personal Loan" oninput="loan_set('${id}','label',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-ui); font-size:18px; font-weight:700; outline:none; width:100%; margin-bottom:12px;"/>
     <div class="dim" style="font-size:12px; margin-bottom:2px;">Original amount</div>
     <div class="input-row"><span class="suffix">$</span><input id="in-sl-original" type="text" inputmode="decimal" value="${rv('in-sl-original',l.original||'')}" oninput="RAW['in-sl-original']=this.value; loan_set('${id}','original',this.value)"/></div>
     <div class="dim" style="font-size:12px; margin:12px 0 2px;">Rate (%)</div>
@@ -2907,8 +2917,8 @@ function renderDebtFreePropertyDetail(propId){
   </div>
   <div class="card" style="padding:14px 16px;">
     <div style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;">
-      ${editing ? `<input id="in-prop-name-${propId}" type="text" value="${prop.name}" oninput="prop_setName('${propId}',this.value)" placeholder="Property name" style="font-size:18px; font-weight:700; background:none; border:none; color:var(--text); font-family:var(--font-ui); outline:none; padding:0; flex:1; min-width:0;"/>` : `<div style="font-size:18px; font-weight:700;">${displayName(prop)}</div>`}
-      ${editing ? `<input id="in-prop-type-${propId}" type="text" value="${prop.type}" oninput="prop_setType('${propId}',this.value)" placeholder="Type" style="font-size:11.5px; background:none; border:none; color:var(--text-dim); font-family:var(--font-ui); outline:none; padding:0; text-align:right; width:100px; flex:0 0 auto;"/>` : `<div class="dim" style="font-size:11.5px; white-space:nowrap;">${prop.type}</div>`}
+      ${editing ? `<input id="in-prop-name-${propId}" type="text" value="${escHtml(prop.name)}" oninput="prop_setName('${propId}',this.value)" placeholder="Property name" style="font-size:18px; font-weight:700; background:none; border:none; color:var(--text); font-family:var(--font-ui); outline:none; padding:0; flex:1; min-width:0;"/>` : `<div style="font-size:18px; font-weight:700;">${displayName(prop)}</div>`}
+      ${editing ? `<input id="in-prop-type-${propId}" type="text" value="${escHtml(prop.type)}" oninput="prop_setType('${propId}',this.value)" placeholder="Type" style="font-size:11.5px; background:none; border:none; color:var(--text-dim); font-family:var(--font-ui); outline:none; padding:0; text-align:right; width:100px; flex:0 0 auto;"/>` : `<div class="dim" style="font-size:11.5px; white-space:nowrap;">${escHtml(prop.type)}</div>`}
     </div>
     <div class="big-number" style="margin-top:3px; font-size:27px; color:${cf>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(cf)}/mo</div>
     <div class="dim" style="font-size:11.5px; margin-top:4px;">Debt-free &mdash; no mortgage on this property</div>
@@ -2952,8 +2962,8 @@ function renderLoanDetail(propId){
 
   <div class="card" style="padding:14px 16px;">
     <div style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;">
-      ${editing && !prop.isStandaloneLoan ? `<input id="in-prop-name-${propId}" type="text" value="${prop.name}" oninput="prop_setName('${propId}',this.value)" placeholder="Property name" style="font-size:18px; font-weight:700; background:none; border:none; color:var(--text); font-family:var(--font-ui); outline:none; padding:0; flex:1; min-width:0;"/>` : `<div style="font-size:18px; font-weight:700;">${displayName(prop)}</div>`}
-      ${editing && !prop.isStandaloneLoan ? `<input id="in-prop-type-${propId}" type="text" value="${prop.type}" oninput="prop_setType('${propId}',this.value)" placeholder="Type" style="font-size:11.5px; background:none; border:none; color:var(--text-dim); font-family:var(--font-ui); outline:none; padding:0; text-align:right; width:100px; flex:0 0 auto;"/>` : `<div class="dim" style="font-size:11.5px; white-space:nowrap;">${prop.type}</div>`}
+      ${editing && !prop.isStandaloneLoan ? `<input id="in-prop-name-${propId}" type="text" value="${escHtml(prop.name)}" oninput="prop_setName('${propId}',this.value)" placeholder="Property name" style="font-size:18px; font-weight:700; background:none; border:none; color:var(--text); font-family:var(--font-ui); outline:none; padding:0; flex:1; min-width:0;"/>` : `<div style="font-size:18px; font-weight:700;">${displayName(prop)}</div>`}
+      ${editing && !prop.isStandaloneLoan ? `<input id="in-prop-type-${propId}" type="text" value="${escHtml(prop.type)}" oninput="prop_setType('${propId}',this.value)" placeholder="Type" style="font-size:11.5px; background:none; border:none; color:var(--text-dim); font-family:var(--font-ui); outline:none; padding:0; text-align:right; width:100px; flex:0 0 auto;"/>` : `<div class="dim" style="font-size:11.5px; white-space:nowrap;">${escHtml(prop.type)}</div>`}
     </div>
     <div class="big-number" style="margin-top:3px; font-size:27px;">${fmt$(c.balance)}</div>
     <div class="stat-row" style="margin-top:10px;">
@@ -3065,7 +3075,7 @@ function renderPlannerSheet(propId){
     </div>`).join('')}
     ` : `<div class="dim" style="font-size:12.5px; margin-bottom:8px;">No extra payments planned yet.</div>`}
 
-    <div class="dim" style="font-size:12px; margin:14px 0 2px;">${draft.editing? 'Amount':'One-time amount'} &middot; applies to ${primaryLoan.label||'primary note'}</div>
+    <div class="dim" style="font-size:12px; margin:14px 0 2px;">${draft.editing? 'Amount':'One-time amount'} &middot; applies to ${escHtml(primaryLoan.label)||'primary note'}</div>
     <div class="input-row">
       <span class="suffix">$</span>
       <input id="in-planner-amount" type="text" inputmode="decimal" value="${rv('in-planner-amount',draft.amount)}" oninput="RAW['in-planner-amount']=this.value; pl_setAmount('${propId}', this.value)"/>
@@ -3252,7 +3262,7 @@ function renderAnalyzerLibrary(){
       const c = analyzerInvCalc(p);
       return `<div class="list-card" onclick="openSheet({type:'analyzerDetail', id:'${p.id}'})">
         <div class="prop-top">
-          <div><div class="prop-name">${p.name}${p.isSample?' <span class="faint" style="font-weight:600; font-size:11.5px;">(sample)</span>':''}</div><div class="prop-sub">Investment</div></div>
+          <div><div class="prop-name">${escHtml(p.name)}${p.isSample?' <span class="faint" style="font-weight:600; font-size:11.5px;">(sample)</span>':''}</div><div class="prop-sub">Investment</div></div>
           <span class="badge ${p.status}">${p.status}</span>
         </div>
         <div class="prop-metrics" style="margin-top:12px;">
@@ -3265,7 +3275,7 @@ function renderAnalyzerLibrary(){
     const c = analyzerCalc(p);
     return `<div class="list-card" onclick="openSheet({type:'analyzerDetail', id:'${p.id}'})">
       <div class="prop-top">
-        <div><div class="prop-name">${p.name}${p.isSample?' <span class="faint" style="font-weight:600; font-size:11.5px;">(sample)</span>':''}</div><div class="prop-sub">${p.addr||'&nbsp;'}</div></div>
+        <div><div class="prop-name">${escHtml(p.name)}${p.isSample?' <span class="faint" style="font-weight:600; font-size:11.5px;">(sample)</span>':''}</div><div class="prop-sub">${p.addr||'&nbsp;'}</div></div>
         <span class="badge ${p.status}">${p.status}</span>
       </div>
       <div class="prop-metrics" style="margin-top:12px;">
@@ -3406,7 +3416,7 @@ function renderAnalyzerDetail(id){
       <div class="iconbtn" onclick="az_closeDetail('${id}')">&times;</div>
     </div>
     <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
-      <input id="in-az-name" type="text" value="${p.name}" oninput="az_setText('${id}','name',this.value)" placeholder="Name this entry" style="font-size:17px; font-weight:700; background:none; border:none; color:var(--text); font-family:var(--font-ui); outline:none; padding:0; flex:1; min-width:0;"/>
+      <input id="in-az-name" type="text" value="${escHtml(p.name)}" oninput="az_setText('${id}','name',this.value)" placeholder="Name this entry" style="font-size:17px; font-weight:700; background:none; border:none; color:var(--text); font-family:var(--font-ui); outline:none; padding:0; flex:1; min-width:0;"/>
       <div class="dim" style="font-size:11.5px; white-space:nowrap; padding-top:3px;">${typeLabel}${p.isSample?' <span class="faint">(sample)</span>':''}</div>
     </div>
     <div class="dim" style="font-size:11px; margin-top:6px;">Loan amount</div>
@@ -3517,7 +3527,7 @@ function renderAnalyzerInvestmentDetail(id){
       <div class="iconbtn" onclick="az_closeDetail('${id}')">&times;</div>
     </div>
     <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
-      <input id="in-az-name" type="text" value="${p.name}" oninput="az_setText('${id}','name',this.value)" placeholder="Name this investment" style="font-size:17px; font-weight:700; background:none; border:none; color:var(--text); font-family:var(--font-ui); outline:none; padding:0; flex:1; min-width:0;"/>
+      <input id="in-az-name" type="text" value="${escHtml(p.name)}" oninput="az_setText('${id}','name',this.value)" placeholder="Name this investment" style="font-size:17px; font-weight:700; background:none; border:none; color:var(--text); font-family:var(--font-ui); outline:none; padding:0; flex:1; min-width:0;"/>
       <div class="dim" style="font-size:11.5px; white-space:nowrap; padding-top:3px;">Investment${p.isSample?' <span class="faint">(sample)</span>':''}</div>
     </div>
     <div class="dim" style="font-size:11px; margin-top:6px;">Starting balance</div>
@@ -3723,14 +3733,14 @@ function renderPrepayAnalysis(){
   const netPositive = r.netAdvantage>=0;
 
   const decisionText = netPositive
-    ? `At <b>${fmt$(c.prepay)}</b> toward ${loanParams.name}, prepaying now leaves you about <b>${fmt$(Math.abs(r.netAdvantage))} ahead</b> of keeping that money invested at a ${fmtPct(c.grossReturn)} gross return over ${horizonLabel}, assuming a ${fmtPct(c.taxRate)} tax rate on investment earnings.`
-    : `At <b>${fmt$(c.prepay)}</b> toward ${loanParams.name}, keeping the money invested is modeled to leave you about <b>${fmt$(Math.abs(r.netAdvantage))} ahead</b> over ${horizonLabel} instead.`;
+    ? `At <b>${fmt$(c.prepay)}</b> toward ${escHtml(loanParams.name)}, prepaying now leaves you about <b>${fmt$(Math.abs(r.netAdvantage))} ahead</b> of keeping that money invested at a ${fmtPct(c.grossReturn)} gross return over ${horizonLabel}, assuming a ${fmtPct(c.taxRate)} tax rate on investment earnings.`
+    : `At <b>${fmt$(c.prepay)}</b> toward ${escHtml(loanParams.name)}, keeping the money invested is modeled to leave you about <b>${fmt$(Math.abs(r.netAdvantage))} ahead</b> over ${horizonLabel} instead.`;
 
   const optimalIsMax = Math.abs(optimal.p - loanParams.balance) < loanParams.balance*0.01;
   const optimalIsZero = optimal.p < loanParams.balance*0.01;
   const dipsNegative = series.some(s=>s.net < -1);
   let optimalNote;
-  if(optimalIsZero) optimalNote = `At these assumptions, investing beats prepaying at every amount tested &mdash; the optimal prepayment on ${loanParams.name} is $0.`;
+  if(optimalIsZero) optimalNote = `At these assumptions, investing beats prepaying at every amount tested &mdash; the optimal prepayment on ${escHtml(loanParams.name)} is $0.`;
   else if(optimalIsMax && !dipsNegative) optimalNote = `At these assumptions, more prepayment keeps helping all the way to payoff &mdash; the optimal amount is the full balance, ${fmt$(loanParams.balance)}.`;
   else if(optimalIsMax && dipsNegative) optimalNote = `Not a straight line: the modeled result dips <i>negative</i> for a stretch of partial prepayments before recovering &mdash; investing briefly wins in the middle of the range. Full payoff still comes out ahead overall.`;
   else optimalNote = `Net advantage peaks at ${fmt$(optimal.p)}, not at either extreme &mdash; worth checking the full curve below, not just this number.`;
@@ -3757,7 +3767,7 @@ function renderPrepayAnalysis(){
   <div class="az-sticky">
     <div class="sheet-handle" style="display:none;"></div>
     <div style="font-size:17px; font-weight:700;">Pay Down Debt or Invest?</div>
-    <div class="dim" style="font-size:12px; margin-top:2px;">${loanParams.name} &middot; ${fmt$(c.prepay)} prepayment</div>
+    <div class="dim" style="font-size:12px; margin-top:2px;">${escHtml(loanParams.name)} &middot; ${fmt$(c.prepay)} prepayment</div>
     <div class="big-number" style="margin-top:6px; font-size:30px; color:${netPositive?'var(--principal)':'var(--interest)'}">${fmtSigned$(r.netAdvantage)}</div>
     <div class="dim" style="font-size:11.5px; margin-top:2px;">Net advantage of prepaying, over ${horizonLabel}</div>
     <div class="stat-row" style="margin-top:10px;">
@@ -3849,7 +3859,7 @@ function renderPrepayAnalysis(){
     ${considered.length===0? `<div class="dim" style="font-size:12px;">No loans left above ${fmtRatio(c.ipThreshold)} I/P &mdash; lower the threshold to see more.</div>` : ''}
     ${considered.map((x,i)=>`
     <div class="row-line" style="${x.id===c.selectedId?'background:var(--accent-soft); margin:0 -8px; padding:9px 8px; border-radius:8px; border-bottom:none;':''}">
-      <span class="l" style="color:var(--text); font-weight:${x.id===c.selectedId?'700':'400'};">${i+1}. ${x.name}${x.applied<c.prepay?' <span class="faint">(capped)</span>':''}</span>
+      <span class="l" style="color:var(--text); font-weight:${x.id===c.selectedId?'700':'400'};">${i+1}. ${escHtml(x.name)}${x.applied<c.prepay?' <span class="faint">(capped)</span>':''}</span>
       <span class="v mono" style="text-align:right;">
         <span style="color:${x.net>=0?'var(--principal)':'var(--interest)'}">${fmtSigned$(x.net)}</span>
         <span class="faint" style="font-size:10.5px; display:block;">${fmtRatio(x.ip)} I/P &middot; ${Math.floor(x.termMonths/12)}y ${x.termMonths%12}mo left</span>
@@ -3857,7 +3867,7 @@ function renderPrepayAnalysis(){
     </div>`).join('')}
     ${excluded.length>0 ? `
     <div class="dim" style="font-size:11px; text-transform:uppercase; letter-spacing:.05em; font-weight:700; margin:14px 0 4px;">Excluded &mdash; below ${fmtRatio(c.ipThreshold)} I/P</div>
-    ${excluded.map(x=>`<div class="row-line"><span class="l faint">${x.name}</span><span class="v faint mono">${fmtRatio(x.ip)} I/P</span></div>`).join('')}
+    ${excluded.map(x=>`<div class="row-line"><span class="l faint">${escHtml(x.name)}</span><span class="v faint mono">${fmtRatio(x.ip)} I/P</span></div>`).join('')}
     ` : ''}
   `)}
 
@@ -3924,7 +3934,7 @@ function incomeSourceCard(src){
   const prop = src.kind==='property' ? findProperty(src.id.slice(5)) : null;
   return `<div class="prop-card" onclick="${onclick}">
     <div class="prop-top">
-      <div><div class="prop-name" style="font-size:15px;">${src.name}</div><div class="prop-sub">${src.sub}</div></div>
+      <div><div class="prop-name" style="font-size:15px;">${escHtml(src.name)}</div><div class="prop-sub">${src.sub}</div></div>
       <div style="text-align:right;">
         <div class="prop-balance" style="font-size:16px; color:${color};">${fmtSigned$(src.amount)}/mo</div>
         ${inv ? `<div class="dim" style="font-size:11.5px; margin-top:1px;">${fmt$(inv.balance)} total</div>` : ''}
@@ -4276,7 +4286,7 @@ function renderInvCellActionSheet(){
     ${existing.length? `
     <div class="dim" style="font-size:11px; text-transform:uppercase; letter-spacing:.06em; font-weight:700; margin-bottom:2px;">Already logged this month</div>
     ${existing.map(e=>`<div class="entry-row">
-      <div><span class="mono" style="font-weight:700;">${fmtSigned$(invEventSign(e.type)*e.amount)}</span>${e.note?` <span class="dim" style="font-size:12.5px;">&middot; ${e.note}</span>`:''}</div>
+      <div><span class="mono" style="font-weight:700;">${fmtSigned$(invEventSign(e.type)*e.amount)}</span>${e.note?` <span class="dim" style="font-size:12.5px;">&middot; ${escHtml(e.note)}</span>`:''}</div>
       <div style="display:flex; align-items:center; gap:10px;">
         <span class="entry-badge ${e.status||'confirmed'}">${e.status||'confirmed'}</span>
         <div class="entry-actions"><button onclick="inv_editCellEvent('${id}','${e.id}')">Edit</button><button class="danger" onclick="inv_deleteCellEvent('${id}','${e.id}')">Delete</button></div>
@@ -4327,7 +4337,7 @@ function renderInvestmentDetail(id){
   </div>
   <div class="card" style="padding:14px 16px;">
     ${inv.committed===false ? `
-    <input id="in-inv-name" type="text" value="${inv.name}" oninput="inv_setName('${id}',this.value)" placeholder="Name this investment" style="font-size:18px; font-weight:700; background:none; border:none; color:var(--text); font-family:var(--font-ui); outline:none; padding:0; width:100%;"/>
+    <input id="in-inv-name" type="text" value="${escHtml(inv.name)}" oninput="inv_setName('${id}',this.value)" placeholder="Name this investment" style="font-size:18px; font-weight:700; background:none; border:none; color:var(--text); font-family:var(--font-ui); outline:none; padding:0; width:100%;"/>
     ` : `<div style="font-size:18px; font-weight:700;">${displayName(inv)}${inv.isSample?' <span class="faint" style="font-weight:600; font-size:11.5px;">(sample)</span>':''}</div>`}
     <div class="dim" style="font-size:11px; margin-top:6px;">Balance</div>
     ${editing || inv.committed===false ? `
@@ -4432,7 +4442,7 @@ function renderInvestmentDetail(id){
     <div>
       <span class="mono" style="font-weight:700;">${fmtSigned$(invEventSign(e.type)*e.amount)}</span>
       <span class="dim" style="font-size:12.5px;"> &middot; ${fmtMonth(parseD(e.date))}</span>
-      ${e.note?`<span class="dim" style="font-size:12.5px;"> &middot; ${e.note}</span>`:''}
+      ${e.note?`<span class="dim" style="font-size:12.5px;"> &middot; ${escHtml(e.note)}</span>`:''}
     </div>
     <div style="display:flex; align-items:center; gap:8px;">
       ${e.status?`<span class="entry-badge ${e.status}">${e.status}</span>`:''}
@@ -4654,7 +4664,7 @@ function renderSettings(){
 
     <div class="dim" style="font-size:11px; margin:14px 0 4px; text-transform:uppercase; letter-spacing:.06em; font-weight:700;">State</div>
     <select onchange="tax_setStateKey(this.value)" style="width:100%; background:var(--surface-3); border:1px solid var(--border); border-radius:10px; padding:9px 11px; color:var(--text); font-family:var(--font-ui); font-size:16px; margin-bottom:8px;">
-      ${Object.entries(STATE_TAX_PROFILES).map(([k,p])=>`<option value="${k}" ${s.tax.stateKey===k?'selected':''}>${p.name}</option>`).join('')}
+      ${Object.entries(STATE_TAX_PROFILES).map(([k,p])=>`<option value="${k}" ${s.tax.stateKey===k?'selected':''}>${escHtml(p.name)}</option>`).join('')}
     </select>
     ${(STATE_TAX_PROFILES[s.tax.stateKey]||STATE_TAX_PROFILES.CUSTOM).kind==='custom' ? `
     <div class="row-line">
@@ -4922,7 +4932,7 @@ function fvmGrowthBreakdownAt(dateStr){
   return { receivables, totalReceivables, spending, growth: totalReceivables-spending };
 }
 function fvmBreakdownRows(items){
-  return items.filter(x=>Math.abs(x.amount)>0.5).map(x=>`<div class="row-line"><span class="l">${x.name}</span><span class="v" style="color:${x.amount>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(x.amount)}</span></div>`).join('');
+  return items.filter(x=>Math.abs(x.amount)>0.5).map(x=>`<div class="row-line"><span class="l">${escHtml(x.name)}</span><span class="v" style="color:${x.amount>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(x.amount)}</span></div>`).join('');
 }
 function fvm_showBreakdown(kind, dateStr){ openSheet({type:'fvmBreakdown', kind, date:dateStr}); }
 function fvm_selectCol(id){ state.fvm.selectedCol = id; state.multCursor = -1; openSheet({type:'fvmColDetail'}); }
@@ -5090,7 +5100,7 @@ function renderSpendAccounts(){
     const bal = spendBalanceOf(a);
     return `<div class="prop-card" onclick="spend_openAccount('${a.id}')">
       <div class="prop-top">
-        <div class="prop-name">${a.name}</div>
+        <div class="prop-name">${escHtml(a.name)}</div>
         <div style="text-align:right;"><div class="prop-balance" style="color:${bal<0?'var(--interest)':'var(--text)'};">${spendFmt$(bal)}</div></div>
       </div>
     </div>`;
@@ -5121,7 +5131,7 @@ function renderSpendDetail(){
   const txs = [...acct.transactions].sort((a,b)=> b.date.localeCompare(a.date) || 0);
   const recurRows = (acct.recurring||[]).map(r=>`
     <div class="cost-row" style="margin-bottom:8px;">
-      <div class="top"><span class="l">${r.description}</span><span class="v" style="color:${r.type==='withdrawal'?'var(--interest)':'var(--principal)'};">${r.type==='withdrawal'?'-':'+'}${spendFmt$(r.amount)}</span></div>
+      <div class="top"><span class="l">${escHtml(r.description)}</span><span class="v" style="color:${r.type==='withdrawal'?'var(--interest)':'var(--principal)'};">${r.type==='withdrawal'?'-':'+'}${spendFmt$(r.amount)}</span></div>
       <div class="asof">${SPEND_FREQ_LABELS[r.frequency]||r.frequency} &middot; next ${spendFmtNextOccurrence(r)} &middot; <span class="link" style="font-size:10.5px;" onclick="spend_openRecurringForm('${acct.id}','${r.id}')">Edit</span> &middot; ${spend_isArmed('deleteRecurRow', r.id)
         ? `<span class="dim" style="font-size:10.5px;">Sure? </span><span class="link" style="font-size:10.5px; color:var(--danger); font-weight:700;" onclick="spend_deleteRecurring('${acct.id}','${r.id}')">Yes</span> &middot; <span class="link" style="font-size:10.5px;" onclick="spend_cancelConfirm()">Cancel</span>`
         : `<span class="link" style="font-size:10.5px; color:var(--danger);" onclick="spend_armConfirm('deleteRecurRow','${r.id}')">Delete</span>`
@@ -5129,7 +5139,7 @@ function renderSpendDetail(){
     </div>`).join('');
   const txRows = txs.map(t=>`
     <div class="row-line" style="cursor:pointer;" onclick="spend_openTxForm('${acct.id}','${t.id}')">
-      <span class="l">${t.description}<div class="dim" style="font-size:11.5px; margin-top:2px; font-weight:400;">${spendFmtDate(t.date)}${spendCategoryName(t.category)?` &middot; ${spendCategoryName(t.category)}`:''}${t.recurringId?' &middot; recurring':''}</div></span>
+      <span class="l">${escHtml(t.description)}<div class="dim" style="font-size:11.5px; margin-top:2px; font-weight:400;">${spendFmtDate(t.date)}${spendCategoryName(t.category)?` &middot; ${spendCategoryName(t.category)}`:''}${t.recurringId?' &middot; recurring':''}</div></span>
       <span class="v" style="color:${t.amount<0?'var(--interest)':'var(--principal)'};">${spendFmtSigned$(t.amount)}</span>
     </div>`).join('');
   return `
@@ -5149,7 +5159,7 @@ function renderSpendDetail(){
   </div>
   <div class="card" style="padding:14px 16px;">
     <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
-      <div style="font-size:18px; font-weight:700; cursor:pointer;" onclick="spend_openAccountForm('${acct.id}')">${acct.name} <span class="dim" style="font-size:12px; font-weight:400;">&#9998;</span></div>
+      <div style="font-size:18px; font-weight:700; cursor:pointer;" onclick="spend_openAccountForm('${acct.id}')">${escHtml(acct.name)} <span class="dim" style="font-size:12px; font-weight:400;">&#9998;</span></div>
       <div style="display:flex; gap:8px;">
         <div class="iconbtn" style="width:26px; height:26px; color:var(--principal); font-weight:800; font-size:16px;" onclick="spend_openTxForm('${acct.id}', null, 'deposit')">+</div>
         <div class="iconbtn" style="width:26px; height:26px; color:var(--interest); font-weight:800; font-size:16px;" onclick="spend_openTxForm('${acct.id}', null, 'withdrawal')">&minus;</div>
@@ -5175,7 +5185,7 @@ function renderSpendSettings(){
   <div class="section-label" style="margin-top:18px;">Default account</div>
   <div class="dim" style="font-size:11.5px; margin-bottom:6px;">Which account Spending opens to first on this device.</div>
   <div class="row-line" style="cursor:pointer;" onclick="spend_setDefaultAccount(null)"><span class="l">Ask each time (show list)</span><span class="v">${!state.settings.spend.defaultAccountId?'&#10003;':''}</span></div>
-  ${spendAccounts.map(a=>`<div class="row-line" style="cursor:pointer;" onclick="spend_setDefaultAccount('${a.id}')"><span class="l">${a.name}</span><span class="v">${state.settings.spend.defaultAccountId===a.id?'&#10003;':''}</span></div>`).join('')}
+  ${spendAccounts.map(a=>`<div class="row-line" style="cursor:pointer;" onclick="spend_setDefaultAccount('${a.id}')"><span class="l">${escHtml(a.name)}</span><span class="v">${state.settings.spend.defaultAccountId===a.id?'&#10003;':''}</span></div>`).join('')}
   ` : ''}
   <div class="section-label" style="margin-top:18px;">One-time setup</div>
   <div class="settings-row">
@@ -5194,7 +5204,7 @@ function renderSpendCategories(){
   const rows = sorted.map(c=>`
     <div class="cat-row" draggable="true" ondragstart="spend_categoryDragStart('${c.id}')" ondragover="event.preventDefault()" ondrop="spend_categoryDrop('${c.id}')" style="display:flex; align-items:center; gap:10px; padding:12px 4px; border-bottom:1px solid var(--border-soft); cursor:grab;">
       <span class="dim" style="flex:0 0 auto;">&#8942;&#8942;</span>
-      <span style="flex:1; font-size:15px; font-weight:600; cursor:pointer;" onclick="spend_openCategoryForm('${c.id}')">${c.name}</span>
+      <span style="flex:1; font-size:15px; font-weight:600; cursor:pointer;" onclick="spend_openCategoryForm('${c.id}')">${escHtml(c.name)}</span>
       <div class="toggle ${c.enabled?'on':''}" onclick="event.stopPropagation(); spend_toggleCategoryEnabled('${c.id}')"><div class="knob"></div></div>
     </div>`).join('');
   return `
