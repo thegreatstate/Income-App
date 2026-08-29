@@ -578,7 +578,7 @@ function spendMaterializeRecurring(){
    inside FinApp's single push({type:'spend'}) slot, mirroring how the standalone app manages
    its own state.screen. Simple Mode (default on) skips straight to the one account's Detail
    screen when exactly one exists, same gating as the standalone app. */
-function spend_open(){
+function spend_routeToDefault(){
   const defaultId = state.settings.spend.defaultAccountId;
   if(spendAccounts.length===1){
     state.spendNav.screen='detail'; state.spendNav.currentAccountId=spendAccounts[0].id;
@@ -587,6 +587,13 @@ function spend_open(){
   } else {
     state.spendNav.screen='accounts';
   }
+}
+/* Legacy entry point (Settings > Personal spending > Spending log) — still uses the single
+   push({type:'spend'}) slot, with its own Back button (see spend_showExitBack()). The main
+   tab bar's Spent button uses spend_goTab() instead, which lands in the same place but as a
+   first-class tab with no Back button, same as FVM/Income/Portfolio/P&L. */
+function spend_open(){
+  spend_routeToDefault();
   push({type:'spend'});
 }
 /* "Home" — exactly one account exists, so there's no meaningful list to show; the account's
@@ -597,6 +604,11 @@ function spend_open(){
 function spend_isHome(acct){
   return !!(acct && spendAccounts.length===1 && acct.id===spendAccounts[0].id);
 }
+function spend_goTab(){ spend_routeToDefault(); goTab('spend'); }
+/* Whether to show the outer "exit Spend" back button — only meaningful for the legacy
+   push({type:'spend'}) entry point; the main Spent tab has nowhere to "exit" to, same as
+   FVM/Income/Portfolio/P&L never show one. */
+function spend_showExitBack(){ return !!(state.pushed && state.pushed.type==='spend'); }
 function spend_openAccount(id){ state.spendNav.currentAccountId=id; state.spendNav.screen='detail'; render(); }
 function spend_detailBack(){ state.spendNav.screen = 'accounts'; render(); }
 function spend_openSettings(){ state.spendNav.settingsFrom = state.spendNav.screen; state.spendNav.screen='settings'; render(); }
@@ -1545,7 +1557,8 @@ const ICON = {
   chart:'<rect x="4" y="12" width="4" height="8" rx="1" fill="currentColor"/><rect x="10" y="7" width="4" height="13" rx="1" fill="currentColor"/><rect x="16" y="3" width="4" height="17" rx="1" fill="currentColor"/>',
   gear:'<path fill-rule="evenodd" fill="currentColor" d="M9.96 5.72 L10.66 1.89 L13.34 1.89 L14.04 5.72 L16.86 3.03 L19.03 4.61 L17.34 8.12 L21.2 7.6 L22.03 10.15 L18.6 12.0 L22.03 13.85 L21.2 16.4 L17.34 15.88 L19.03 19.39 L16.86 20.97 L14.04 18.28 L13.34 22.11 L10.66 22.11 L9.96 18.28 L7.14 20.97 L4.97 19.39 L6.66 15.88 L2.8 16.4 L1.97 13.85 L5.4 12.0 L1.97 10.15 L2.8 7.6 L6.66 8.12 L4.97 4.61 L7.14 3.03 Z M15.6 12 A3.6 3.6 0 1 0 8.4 12 A3.6 3.6 0 1 0 15.6 12 Z"/>',
   flag:'<path d="M6 3v18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M6 4h12l-3.2 4L18 12H6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>',
-  coin:'<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 7.5v9M14.7 9.7c0-1.1-1.2-2-2.7-2s-2.7.9-2.7 2 1.2 1.6 2.7 2 2.7.9 2.7 2-1.2 2-2.7 2-2.7-.9-2.7-2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>'
+  coin:'<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 7.5v9M14.7 9.7c0-1.1-1.2-2-2.7-2s-2.7.9-2.7 2 1.2 1.6 2.7 2 2.7.9 2.7 2-1.2 2-2.7 2-2.7-.9-2.7-2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>',
+  wallet:'<path d="M3.5 7.2A2 2 0 0 1 5.5 5.2h11a2 2 0 0 1 2 2V7h1a1.5 1.5 0 0 1 1.5 1.5v9A1.5 1.5 0 0 1 19.5 19h-14a2 2 0 0 1-2-2Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M14.2 13.5a1.3 1.3 0 1 0 0-2.6 1.3 1.3 0 0 0 0 2.6Z" fill="currentColor"/>'
 };
 function tabIcon(name){ return '<svg viewBox="0 0 24 24">'+ICON[name]+'</svg>'; }
 
@@ -1586,6 +1599,7 @@ function render(){
     if(state.tab==='income') html = renderIncome();
     if(state.tab==='pl') html = renderPL();
     if(state.tab==='fvm') html = renderFVM();
+    if(state.tab==='spend') html = renderSpend();
     /* 'goals' tab temporarily removed from the tabbar per user request — renderGoalsPlaceholder() left intact below for easy restore */
   }
   const prevScroll = state._resetScroll ? 0 : screen.scrollTop;
@@ -1625,9 +1639,9 @@ function render(){
 function renderTabbar(){
   const tabbar=document.getElementById('tabbar');
   if(state.pushed){ tabbar.innerHTML=''; return; }
-  const tabs=[['fvm','flag','FVM'],['income','coin','Income'],['portfolio','home','Portfolio'],['pl','chart','P&amp;L']];
+  const tabs=[['fvm','flag','FVM'],['income','coin','Income'],['portfolio','home','Portfolio'],['pl','chart','P&amp;L'],['spend','wallet','Spent']];
   tabbar.innerHTML = tabs.map(([id,icon,label])=>
-    `<button class="tabbtn ${state.tab===id?'active':''}" onclick="goTab('${id}')">${tabIcon(icon)}<span>${label}</span></button>`
+    `<button class="tabbtn ${state.tab===id?'active':''}" onclick="${id==='spend'?'spend_goTab()':`goTab('${id}')`}">${tabIcon(icon)}<span>${label}</span></button>`
   ).join('');
 }
 
@@ -5056,7 +5070,7 @@ function renderSpendAccounts(){
   }).join('');
   return `
   <div class="header-sticky">
-    <button class="back" onclick="goBack()">&lsaquo; ${backLabel()}</button>
+    ${spend_showExitBack() ? `<button class="back" onclick="goBack()">&lsaquo; ${backLabel()}</button>` : `<div></div>`}
     <div style="display:flex; gap:8px;">
       <div class="iconbtn" onclick="spend_openSettings()">${tabIcon('gear')}</div>
       <div class="iconbtn" onclick="spend_openAccountForm(null)">+</div>
@@ -5094,10 +5108,10 @@ function renderSpendDetail(){
   return `
   <div class="header-sticky">
     ${isHome ? `
-    <button class="back" onclick="goBack()">&lsaquo; ${backLabel()}</button>
+    ${spend_showExitBack() ? `<button class="back" onclick="goBack()">&lsaquo; ${backLabel()}</button>` : `<div></div>`}
     ` : `
     <div style="display:flex; gap:14px; align-items:center;">
-      <button class="back" onclick="goBack()">&lsaquo; ${backLabel()}</button>
+      ${spend_showExitBack() ? `<button class="back" onclick="goBack()">&lsaquo; ${backLabel()}</button>` : ''}
       <button class="back" onclick="spend_detailBack()">&lsaquo; Spent</button>
     </div>
     `}
