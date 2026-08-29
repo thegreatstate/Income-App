@@ -579,8 +579,11 @@ function spendMaterializeRecurring(){
    its own state.screen. Simple Mode (default on) skips straight to the one account's Detail
    screen when exactly one exists, same gating as the standalone app. */
 function spend_open(){
+  const defaultId = state.settings.spend.defaultAccountId;
   if(spendAccounts.length===1){
     state.spendNav.screen='detail'; state.spendNav.currentAccountId=spendAccounts[0].id;
+  } else if(defaultId && spendGetAccount(defaultId)){
+    state.spendNav.screen='detail'; state.spendNav.currentAccountId=defaultId;
   } else {
     state.spendNav.screen='accounts';
   }
@@ -597,6 +600,7 @@ function spend_isHome(acct){
 function spend_openAccount(id){ state.spendNav.currentAccountId=id; state.spendNav.screen='detail'; render(); }
 function spend_detailBack(){ state.spendNav.screen = 'accounts'; render(); }
 function spend_openSettings(){ state.spendNav.settingsFrom = state.spendNav.screen; state.spendNav.screen='settings'; render(); }
+function spend_setDefaultAccount(id){ state.settings.spend.defaultAccountId=id; saveLocalData(); render(); }
 function spend_settingsBack(){ state.spendNav.screen = state.spendNav.settingsFrom || 'accounts'; render(); }
 function spend_categoriesBack(){ state.spendNav.screen='settings'; render(); }
 
@@ -623,6 +627,7 @@ function spend_saveAccountForm(){
 function spend_deleteAccount(id){
   const idx = spendAccounts.findIndex(a=>a.id===id);
   if(idx>=0) spendAccounts.splice(idx,1);
+  if(state.settings.spend.defaultAccountId===id) state.settings.spend.defaultAccountId=null;
   saveLocalData();
   closeSheet();
   state.spendNav.screen='accounts';
@@ -1393,7 +1398,7 @@ const state = { tab:'fvm', pushed:null, sheet:null, sheetEdit:false, propEdit:fa
     tax:{ enabled:false, mode:'auto', manualQuarterlyAmount:0,
       fedBrackets:[ {threshold:0, rate:10}, {threshold:23200, rate:12}, {threshold:94300, rate:22}, {threshold:201050, rate:24} ],
       stateKey:'MT', stateRate:5, otherIncome:0, otherQualifiedIncome:0, useNIIT:true, bracketInflationPct:2.5, dueMonths:[4,6,9,1] },
-    spend:{ importVisible:true } },
+    spend:{ importVisible:true, defaultAccountId:null } },
   settingsOpen:{ general:true, pm:false, defaults:false, rates:false, events:false, estTax:false },
   portfolioAnalyzerOpen:false,
   spendCompare:{ a:null, b:null },
@@ -5125,6 +5130,12 @@ function renderSpendSettings(){
   <div class="row-line" style="cursor:pointer;" onclick="state.spendNav.screen='accounts'; render()"><span class="l">Accounts</span><span class="v" style="color:var(--text-dim); font-weight:400;">${spendAccounts.length} &rsaquo;</span></div>
   <div class="row-line" style="cursor:pointer;" onclick="state.spendNav.screen='categories'; render()"><span class="l">Categories</span><span class="v" style="color:var(--text-dim); font-weight:400;">${spendCategories.length} &rsaquo;</span></div>
   <div class="dim" style="font-size:10.5px; margin-top:12px;">Spending accounts, transactions, and categories are included in FinApp's own Export/Import and Reset in the main Settings &mdash; nothing separate to back up here.</div>
+  ${spendAccounts.length>1 ? `
+  <div class="section-label" style="margin-top:18px;">Default account</div>
+  <div class="dim" style="font-size:11.5px; margin-bottom:6px;">Which account Spending opens to first on this device.</div>
+  <div class="row-line" style="cursor:pointer;" onclick="spend_setDefaultAccount(null)"><span class="l">Ask each time (show list)</span><span class="v">${!state.settings.spend.defaultAccountId?'&#10003;':''}</span></div>
+  ${spendAccounts.map(a=>`<div class="row-line" style="cursor:pointer;" onclick="spend_setDefaultAccount('${a.id}')"><span class="l">${a.name}</span><span class="v">${state.settings.spend.defaultAccountId===a.id?'&#10003;':''}</span></div>`).join('')}
+  ` : ''}
   <div class="section-label" style="margin-top:18px;">One-time setup</div>
   <div class="settings-row">
     <div><div class="l" style="font-size:13.5px;">Show import transactions</div><div class="sub">Bring in history from another app &mdash; turn off once you're done with it</div></div>
