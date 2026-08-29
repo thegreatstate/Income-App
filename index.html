@@ -1515,7 +1515,18 @@ function handleImportFile(input){
   input.value = '';
 }
 
-function numFrom(v){ return Number(String(v).replace(/[^0-9.\-]/g,''))||0; }
+/* Try a direct parse first (handles "1e10" scientific notation correctly, e.g. pasted
+   from a spreadsheet cell too wide/large for its column) — the digit-stripping fallback
+   below would otherwise silently mangle it into "110". Falls back to stripping non-numeric
+   junk (currency symbols, thousands separators) for anything the direct parse can't read. */
+function numFrom(v){
+  if(v===null || v===undefined) return 0;
+  const s = String(v).trim();
+  if(!s) return 0;
+  const direct = Number(s.replace(/,/g,''));
+  if(Number.isFinite(direct)) return direct;
+  return Number(s.replace(/[^0-9.\-]/g,''))||0;
+}
 /* Escapes free-text fields (names, descriptions, notes, types) before they land in an
    innerHTML template — everything here is entered by the household, but an imported
    JSON/CSV file is untrusted input, and unescaped text lets something like an <img
@@ -1538,11 +1549,24 @@ function privacyRound(n){
 }
 function compactFmt$(n){
   const sign = n<0?'-':'', abs = Math.abs(n);
-  if(abs>=1000000){
-    const m = Math.round(abs/100000)/10;
-    return sign+'$'+(Number.isInteger(m)?m:m.toFixed(1))+'M';
+  // M/B/T get one decimal of precision; K stays whole (a single K is negligible once
+  // you're past a million, but matters at the K scale, so it's always rounded clean).
+  const TIERS = [[1e12,'T'],[1e9,'B'],[1e6,'M']];
+  for(let i=0;i<TIERS.length;i++){
+    let [divisor, suffix] = TIERS[i];
+    if(abs < divisor) continue;
+    // A value like 999,999,999 rounds to "1000M" at this tier — bump to the next
+    // tier up ("1B") instead of displaying four digits in front of the suffix.
+    if(i>0 && Math.round(abs/(divisor/10))/10 >= 1000) [divisor, suffix] = TIERS[i-1];
+    const v = Math.round(abs/(divisor/10))/10;
+    return sign+'$'+(Number.isInteger(v)?v:v.toFixed(1))+suffix;
   }
-  if(abs>=1000) return sign+'$'+Math.round(abs/1000)+'K';
+  if(abs>=1000){
+    const k = Math.round(abs/1000);
+    // 999,500+ rounds to "1000K" — bump to "$1M" instead.
+    if(k>=1000) return sign+'$1M';
+    return sign+'$'+k+'K';
+  }
   return sign+'$'+(Math.round(abs/100)*100).toLocaleString('en-US');
 }
 function fmt$(n){
