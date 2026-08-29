@@ -1310,7 +1310,9 @@ function propertyOperatingProfit(prop){ return propertyRevenue(prop) - propertyC
    fairest default rather than assuming spending comes out of one side first. */
 function splitGrowthByIncome(growth, propTotal, invTotal){
   const total = propTotal+invTotal;
-  if(Math.abs(total)<0.01) return {prop:0, inv:0};
+  // Neither side brought in anything to split by (e.g. no properties/investments yet) —
+  // an even split keeps a real deficit/surplus visible instead of silently showing $0/$0.
+  if(Math.abs(total)<0.01) return {prop: growth/2, inv: growth/2};
   return { prop: propTotal*growth/total, inv: invTotal*growth/total };
 }
 function propertyCashFlowAtDate(prop, date){
