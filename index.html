@@ -1416,6 +1416,8 @@ const state = { tab:'fvm', pushed:null, sheet:null, sheetEdit:false, propEdit:fa
   spendCompare:{ a:null, b:null },
   spendNav:{ screen:'accounts', currentAccountId:null },
   spendConfirm:null, // {type, id} — in-app two-tap confirm, since native confirm() dialogs can be silently blocked depending on how the page is embedded
+  confirmArm:null, // {type, id} — same two-tap pattern as spendConfirm, for delete/reset actions outside Spend (properties, investments, analyzer samples, main data reset)
+  importStatus:null, // {ok, msg} — inline result of the last JSON import, instead of alert() (same silent-failure risk as confirm())
   planner:{}, analyzerSel:{}, azSections:{},
   cas:{ selectedId:'montana2', customBalance:350000, customRate:5.99, customTermYears:27,
     prepay:50000, grossReturn:4.5, taxRate:24, horizonKey:'5', horizonYearsCustom:5,
@@ -1479,7 +1481,6 @@ function exportData(){
   render();
 }
 function resetLocalData(){
-  if(!confirm("This clears everything saved on this device and reloads the app's built-in data. Any changes you've made here will be lost — export first if you want to keep them. Continue?")) return;
   try{ localStorage.removeItem(FINAPP_STORAGE_KEY); }catch(e){}
   location.reload();
 }
@@ -1502,10 +1503,11 @@ function handleImportFile(input){
       state.lastSyncAt = data.exportedAt || new Date().toISOString();
       for(const k in SCHED) delete SCHED[k];
       for(const k in SCHED_INDEX) delete SCHED_INDEX[k];
+      state.importStatus = {ok:true, msg:'Imported successfully.'};
       render();
-      alert('Imported successfully.');
     }catch(err){
-      alert('Could not read that file — make sure it\'s a FinApp export (.json).');
+      state.importStatus = {ok:false, msg:'Could not read that file — make sure it\'s a FinApp export (.json).'};
+      render();
     }
   };
   reader.readAsText(file);
@@ -1565,18 +1567,24 @@ function tabIcon(name){ return '<svg viewBox="0 0 24 24">'+ICON[name]+'</svg>'; 
 /* ============ NAV ============ */
 const RAW = {};
 function rv(id, fallback){ return RAW[id]!==undefined ? RAW[id] : String(fallback); }
-function goTab(t){ state.tab=t; state.pushed=null; state.sheet=null; state._resetScroll=true; for(const k in RAW) delete RAW[k]; render(); }
-function push(view){ state.pushed=view; state.propEdit=false; state._resetScroll=true; state.azSections={}; for(const k in RAW) delete RAW[k]; render(); }
+function goTab(t){ state.tab=t; state.pushed=null; state.sheet=null; state._resetScroll=true; state.confirmArm=null; state.importStatus=null; for(const k in RAW) delete RAW[k]; render(); }
+function push(view){ state.pushed=view; state.propEdit=false; state._resetScroll=true; state.azSections={}; state.confirmArm=null; state.importStatus=null; for(const k in RAW) delete RAW[k]; render(); }
 function goBack(){
-  state.pushed=null; state.propEdit=false; state._resetScroll=true; state.azSections={}; for(const k in RAW) delete RAW[k];
+  state.pushed=null; state.propEdit=false; state._resetScroll=true; state.azSections={}; state.confirmArm=null; state.importStatus=null; for(const k in RAW) delete RAW[k];
   if(state.returnToSheet){ const sheet=state.returnToSheet; state.returnToSheet=null; openSheet(sheet); return; }
   render();
 }
 function togglePropEdit(){ state.propEdit = !state.propEdit; render(); }
 function backLabel(){ return {income:'Income', portfolio:'Portfolio', pl:'P&L'}[state.tab] || 'Back'; }
-function openSheet(view){ state.sheet=view; state.sheetEdit=false; state.plannerInfoOpen=false; state.azSections={}; for(const k in RAW) delete RAW[k]; render(); }
+function openSheet(view){ state.sheet=view; state.sheetEdit=false; state.plannerInfoOpen=false; state.azSections={}; state.confirmArm=null; for(const k in RAW) delete RAW[k]; render(); }
 function togglePlannerInfo(){ state.plannerInfoOpen=!state.plannerInfoOpen; render(); }
-function closeSheet(){ state.sheet=null; state.azSections={}; state.spendConfirm=null; for(const k in RAW) delete RAW[k]; render(); }
+function closeSheet(){ state.sheet=null; state.azSections={}; state.spendConfirm=null; state.confirmArm=null; for(const k in RAW) delete RAW[k]; render(); }
+/* General in-app two-tap confirm for destructive actions outside Spend (properties,
+   investments, analyzer samples, main data reset) — same reasoning as spend_armConfirm:
+   native confirm() dialogs can be silently blocked depending on how the page is embedded. */
+function armConfirm(type, id){ state.confirmArm = {type, id: id||null}; render(); }
+function cancelConfirm(){ state.confirmArm = null; render(); }
+function isArmed(type, id){ return !!(state.confirmArm && state.confirmArm.type===type && state.confirmArm.id===(id||null)); }
 
 /* ============ RENDER ROOT ============ */
 function render(){
@@ -2911,7 +2919,10 @@ function renderDebtFreePropertyDetail(propId){
   ${renderRevenueSection(prop, editing)}
   ${renderCostsSection(prop, editing)}
   <div class="footnote" style="margin-top:18px; margin-bottom:6px;">No loan on this property, so there's no amortization or extra-payment planner to show &mdash; just revenue and costs.</div>
-  ${editing ? `<div style="text-align:center; margin-top:18px;"><span class="link" style="color:var(--danger); font-size:13px;" onclick="if(confirm('Delete ${prop.name.replace(/'/g,"\\'")}?')) prop_delete('${propId}')">Delete property</span></div>` : ''}
+  ${editing ? `<div style="text-align:center; margin-top:18px;">${isArmed('deleteProperty', propId)
+    ? `<span class="dim" style="font-size:13px;">Delete this property? </span><span class="link" style="color:var(--danger); font-size:13px; font-weight:700;" onclick="prop_delete('${propId}')">Yes, delete</span> &middot; <span class="link" style="font-size:13px;" onclick="cancelConfirm()">Cancel</span>`
+    : `<span class="link" style="color:var(--danger); font-size:13px;" onclick="armConfirm('deleteProperty','${propId}')">Delete property</span>`
+  }</div>` : ''}
   `;
 }
 function renderLoanDetail(propId){
@@ -2987,7 +2998,10 @@ function renderLoanDetail(propId){
   </table>
   </div>
   <details class="footnote" style="margin-bottom:6px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Debt vs. ownership visualization &mdash; reserved, not designed yet.</div></details>
-  ${editing && !prop.isStandaloneLoan ? `<div style="text-align:center; margin-top:12px;"><span class="link" style="color:var(--danger); font-size:13px;" onclick="if(confirm('Delete ${prop.name.replace(/'/g,"\\'")}?')) prop_delete('${propId}')">Delete property</span></div>` : ''}
+  ${editing && !prop.isStandaloneLoan ? `<div style="text-align:center; margin-top:12px;">${isArmed('deleteProperty', propId)
+    ? `<span class="dim" style="font-size:13px;">Delete this property? </span><span class="link" style="color:var(--danger); font-size:13px; font-weight:700;" onclick="prop_delete('${propId}')">Yes, delete</span> &middot; <span class="link" style="font-size:13px;" onclick="cancelConfirm()">Cancel</span>`
+    : `<span class="link" style="color:var(--danger); font-size:13px;" onclick="armConfirm('deleteProperty','${propId}')">Delete property</span>`
+  }</div>` : ''}
   `;
 }
 
@@ -3385,7 +3399,10 @@ function renderAnalyzerDetail(id){
   <div class="az-sticky">
     <div class="sheet-handle"></div>
     <div class="sheet-head" style="margin-bottom:8px;">
-      ${p.committed ? `<span class="link" style="color:var(--danger); font-size:14px;" onclick="if(confirm('Delete ${p.name.replace(/'/g,"\\'")}?')) az_delete('${id}')">Delete</span>` : '<span></span>'}
+      ${p.committed ? `<span>${isArmed('deleteAnalyzer', id)
+        ? `<span class="dim" style="font-size:12.5px;">Sure? </span><span class="link" style="color:var(--danger); font-size:14px; font-weight:700;" onclick="az_delete('${id}')">Yes, delete</span> &middot; <span class="link" style="font-size:12.5px;" onclick="cancelConfirm()">Cancel</span>`
+        : `<span class="link" style="color:var(--danger); font-size:14px;" onclick="armConfirm('deleteAnalyzer','${id}')">Delete</span>`
+      }</span>` : '<span></span>'}
       <div class="iconbtn" onclick="az_closeDetail('${id}')">&times;</div>
     </div>
     <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
@@ -3493,7 +3510,10 @@ function renderAnalyzerInvestmentDetail(id){
   <div class="az-sticky">
     <div class="sheet-handle"></div>
     <div class="sheet-head" style="margin-bottom:8px;">
-      ${p.committed ? `<span class="link" style="color:var(--danger); font-size:14px;" onclick="if(confirm('Delete ${p.name.replace(/'/g,"\\'")}?')) az_delete('${id}')">Delete</span>` : '<span></span>'}
+      ${p.committed ? `<span>${isArmed('deleteAnalyzer', id)
+        ? `<span class="dim" style="font-size:12.5px;">Sure? </span><span class="link" style="color:var(--danger); font-size:14px; font-weight:700;" onclick="az_delete('${id}')">Yes, delete</span> &middot; <span class="link" style="font-size:12.5px;" onclick="cancelConfirm()">Cancel</span>`
+        : `<span class="link" style="color:var(--danger); font-size:14px;" onclick="armConfirm('deleteAnalyzer','${id}')">Delete</span>`
+      }</span>` : '<span></span>'}
       <div class="iconbtn" onclick="az_closeDetail('${id}')">&times;</div>
     </div>
     <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
@@ -4419,7 +4439,10 @@ function renderInvestmentDetail(id){
       <div class="dim" style="font-size:12px;">${e.type==='withdrawal'?'Withdrawn':e.type==='deposit'?'Deposited':e.type==='transfer_out'?'To '+displayLinkedName(e.linkedName):'From '+displayLinkedName(e.linkedName)}</div>
     </div>
   </div>`).join('')}
-  <div style="text-align:center; margin-top:18px;"><span class="link" style="color:var(--danger); font-size:13px;" onclick="if(confirm('Delete ${inv.name.replace(/'/g,"\\'")}?')) inv_delete('${id}')">Delete investment</span></div>
+  <div style="text-align:center; margin-top:18px;">${isArmed('deleteInvestment', id)
+    ? `<span class="dim" style="font-size:13px;">Delete this investment? </span><span class="link" style="color:var(--danger); font-size:13px; font-weight:700;" onclick="inv_delete('${id}')">Yes, delete</span> &middot; <span class="link" style="font-size:13px;" onclick="cancelConfirm()">Cancel</span>`
+    : `<span class="link" style="color:var(--danger); font-size:13px;" onclick="armConfirm('deleteInvestment','${id}')">Delete investment</span>`
+  }</div>
   `}
   <details class="footnote" style="margin-bottom:6px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">${inv.isSample?'Sample entry with placeholder numbers &mdash; replace with a real account when ready. ':''}Balance is what you tell it, not computed &mdash; update it whenever you check a real statement. Rate holds steady until you change it here.</div></details>
   `;
@@ -4535,7 +4558,11 @@ function renderSettings(){
       <div class="row-line"><span class="l">Export data (.json)</span><button class="selectchip" onclick="exportData()">Export</button></div>
       <div class="row-line"><span class="l">Import data (.json)</span><button class="selectchip" onclick="triggerImport()">Import</button></div>
       <input id="importFileInput" type="file" accept="application/json,.json" style="display:none" onchange="handleImportFile(this)"/>
-      <div class="row-line"><span class="l">Reset to built-in data</span><button class="selectchip" style="color:var(--danger); background:var(--interest-soft);" onclick="resetLocalData()">Reset</button></div>
+      ${state.importStatus ? `<div class="dim" style="font-size:12px; margin-top:-4px; margin-bottom:8px; color:${state.importStatus.ok?'var(--principal)':'var(--danger)'};">${state.importStatus.msg}</div>` : ''}
+      ${isArmed('resetLocal')
+        ? `<div style="text-align:center; margin-top:14px;"><div class="dim" style="font-size:12.5px; margin-bottom:8px;">This clears everything saved on this device and reloads the app's built-in data. Any changes you've made here will be lost &mdash; export first if you want to keep them.</div><button class="reset-btn" style="width:100%; background:var(--interest-soft); border:1px solid var(--danger); color:var(--danger); font-weight:700; font-size:15px; padding:13px; border-radius:13px; cursor:pointer;" onclick="resetLocalData()">Yes, reset to built-in data</button><div style="margin-top:8px;"><span class="link" style="font-size:12.5px;" onclick="cancelConfirm()">Cancel</span></div></div>`
+        : `<div class="row-line"><span class="l">Reset to built-in data</span><button class="selectchip" style="color:var(--danger); background:var(--interest-soft);" onclick="armConfirm('resetLocal')">Reset</button></div>`
+      }
       <details class="footnote" style="margin-top:8px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Everything you enter is saved on this device automatically, and that saved copy is what loads every time &mdash; including ahead of any update to the app itself, so a new property or feature can be invisible here until you reset. Export creates a file you can send to someone else (or save to a shared folder like iCloud Drive) &mdash; they Import it into their own copy to get your numbers. Reset clears what's saved on this device and reloads the app's built-in data instead &mdash; use it after an update, or Export first if you want to keep your changes. Nothing is ever uploaded anywhere on its own.</div></details>
     </div>` : ''}
   </div>
