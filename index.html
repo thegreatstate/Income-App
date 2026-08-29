@@ -2241,7 +2241,7 @@ function customCostRow(propId, c, editing){
   if(editing){
     return `<div class="cost-row">
       <div class="top" style="gap:8px;">
-        <input id="in-cc-name-${c.id}" type="text" value="${c.name||''}" placeholder="e.g. Trash" oninput="customCost_setName('${propId}','${c.id}',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-ui); font-size:16px; font-weight:600; outline:none; flex:1; min-width:0;"/>
+        <input id="in-cc-name-${c.id}" type="text" value="${escHtml(c.name||'')}" placeholder="e.g. Trash" oninput="customCost_setName('${propId}','${c.id}',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-ui); font-size:16px; font-weight:600; outline:none; flex:1; min-width:0;"/>
         <input id="in-cc-${c.id}" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-cc-'+c.id, c.amount||'')}" oninput="RAW['in-cc-${c.id}']=this.value; customCost_setAmount('${propId}','${c.id}',this.value)"/>
       </div>
       <div class="seg" style="margin-top:8px;">
@@ -2251,7 +2251,7 @@ function customCostRow(propId, c, editing){
     </div>`;
   }
   return `<div class="cost-row">
-    <div class="top"><span class="l">${c.name||'(unnamed)'} <span class="faint">(${FREQ_TAG[c.freq||'yearly']})</span></span><span class="v">${fmt$(monthly)}/mo</span></div>
+    <div class="top"><span class="l">${escHtml(c.name)||'(unnamed)'} <span class="faint">(${FREQ_TAG[c.freq||'yearly']})</span></span><span class="v">${fmt$(monthly)}/mo</span></div>
   </div>`;
 }
 function rev_set(id, idx, val){ const p=findProperty(id); p.units[idx].rent=Math.max(0, numFrom(val)); render(); }
@@ -2554,7 +2554,7 @@ function renderSheet(){
         <div class="top" style="gap:8px; margin-top:6px;">
           <span class="suffix">$</span>
           <input id="in-sov-amt-${o.id}" type="text" inputmode="decimal" style="${editFieldStyle}" value="${rv('in-sov-amt-'+o.id, o.amount||'')}" oninput="RAW['in-sov-amt-${o.id}']=this.value; spendingOverride_setAmount('${o.id}',this.value)"/>
-          <input id="in-sov-note-${o.id}" type="text" value="${o.note||''}" placeholder="e.g. Tax payment" oninput="spendingOverride_setNote('${o.id}',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-ui); font-size:16px; font-weight:600; outline:none; flex:1; min-width:0;"/>
+          <input id="in-sov-note-${o.id}" type="text" value="${escHtml(o.note||'')}" placeholder="e.g. Tax payment" oninput="spendingOverride_setNote('${o.id}',this.value)" style="background:none; border:none; color:var(--text); font-family:var(--font-ui); font-size:16px; font-weight:600; outline:none; flex:1; min-width:0;"/>
         </div>
         <div style="text-align:right; margin-top:4px;"><span class="link" style="color:var(--danger); font-size:11px;" onclick="spendingOverride_delete('${o.id}')">Remove</span></div>
       </div>`).join('')}
@@ -4376,7 +4376,7 @@ function renderInvCellActionSheet(){
     <div class="dim" style="font-size:12px; margin:12px 0 2px;">Amount</div>
     <div class="input-row"><span class="suffix">$</span><input id="in-cell-amt" type="text" inputmode="decimal" value="${rv('in-cell-amt',draft.amount||'')}" oninput="RAW['in-cell-amt']=this.value; invAction_setAmount(this.value)"/></div>
     <div class="dim" style="font-size:12px; margin:12px 0 2px;">Note <span class="faint">(optional)</span></div>
-    <div class="input-row"><input id="in-cell-note" type="text" value="${draft.note||''}" placeholder="e.g. Property taxes" oninput="invAction_setNote(this.value)" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:16px;font-weight:600;outline:none;width:100%;"/></div>
+    <div class="input-row"><input id="in-cell-note" type="text" value="${escHtml(draft.note||'')}" placeholder="e.g. Property taxes" oninput="invAction_setNote(this.value)" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:16px;font-weight:600;outline:none;width:100%;"/></div>
     <div class="dim" style="font-size:11.5px; margin-top:10px;">Current balance: ${fmt$(inv.balance)}${!isPastOrToday?' &middot; unaffected until '+fmtMonth(parseD(draft.date)):''}</div>
     ${isPastOrToday ? `
     <div class="btn-row" style="margin-top:14px;">
@@ -4467,8 +4467,8 @@ function renderInvestmentDetail(id){
     ` : ''}
     `}
     ` : (invRecurringActive(inv) ? (inv.recurring.growthShare
-        ? `<div class="dim" style="font-size:11px; margin-top:10px; color:var(--principal);">Growth share: ${inv.recurring.growthShare.mode==='pct'?inv.recurring.growthShare.value+'%':fmt$(inv.recurring.growthShare.value)}${inv.recurring.note?' &middot; '+inv.recurring.note:''}, starting ${fmtMonth(parseD(inv.recurring.startDate))}</div>`
-        : `<div class="dim" style="font-size:11px; margin-top:10px; color:${inv.recurring.direction==='debit'?'var(--interest)':'var(--principal)'};">${inv.recurring.direction==='debit'?'&minus;':'+'}${fmt$(inv.recurring.amount)}/mo recurring${inv.recurring.note?' &middot; '+inv.recurring.note:''}, starting ${fmtMonth(parseD(inv.recurring.startDate))}</div>`
+        ? `<div class="dim" style="font-size:11px; margin-top:10px; color:var(--principal);">Growth share: ${inv.recurring.growthShare.mode==='pct'?inv.recurring.growthShare.value+'%':fmt$(inv.recurring.growthShare.value)}${inv.recurring.note?' &middot; '+escHtml(inv.recurring.note):''}, starting ${fmtMonth(parseD(inv.recurring.startDate))}</div>`
+        : `<div class="dim" style="font-size:11px; margin-top:10px; color:${inv.recurring.direction==='debit'?'var(--interest)':'var(--principal)'};">${inv.recurring.direction==='debit'?'&minus;':'+'}${fmt$(inv.recurring.amount)}/mo recurring${inv.recurring.note?' &middot; '+escHtml(inv.recurring.note):''}, starting ${fmtMonth(parseD(inv.recurring.startDate))}</div>`
       ) : '')}
     <div class="dim" style="font-size:11px; margin-top:10px; display:flex; justify-content:space-between;">
       <span>Balance as of ${inv.balanceDate?fmtMonth(parseD(inv.balanceDate)):'&mdash;'}</span>
@@ -5152,8 +5152,8 @@ function fvmSelectedDetailCard(){
       <div class="stat-pill"><div class="v" style="color:var(--principal); font-size:14px;">${fmtSigned$(invMonthlyReturn(inv))}</div><div class="l">Est. monthly</div></div>
     </div>
     ${invRecurringActive(inv) ? (inv.recurring.growthShare
-      ? `<div class="dim" style="font-size:11px; margin-top:10px; color:var(--principal);">Growth share: ${inv.recurring.growthShare.mode==='pct'?inv.recurring.growthShare.value+'%':fmt$(inv.recurring.growthShare.value)}${inv.recurring.note?' &middot; '+inv.recurring.note:''}</div>`
-      : `<div class="dim" style="font-size:11px; margin-top:10px; color:${inv.recurring.direction==='debit'?'var(--interest)':'var(--principal)'};">${inv.recurring.direction==='debit'?'&minus;':'+'}${fmt$(inv.recurring.amount)}/mo recurring${inv.recurring.note?' &middot; '+inv.recurring.note:''}</div>`
+      ? `<div class="dim" style="font-size:11px; margin-top:10px; color:var(--principal);">Growth share: ${inv.recurring.growthShare.mode==='pct'?inv.recurring.growthShare.value+'%':fmt$(inv.recurring.growthShare.value)}${inv.recurring.note?' &middot; '+escHtml(inv.recurring.note):''}</div>`
+      : `<div class="dim" style="font-size:11px; margin-top:10px; color:${inv.recurring.direction==='debit'?'var(--interest)':'var(--principal)'};">${inv.recurring.direction==='debit'?'&minus;':'+'}${fmt$(inv.recurring.amount)}/mo recurring${inv.recurring.note?' &middot; '+escHtml(inv.recurring.note):''}</div>`
     ) : ''}
     <div style="text-align:right; margin-top:8px;"><span class="link" style="font-size:12.5px;" onclick="state.returnToSheet={type:'fvmColDetail'}; closeSheet(); push({type:'investment', id:'${inv.id}'})">Edit this account &rsaquo;</span></div>
   `;
