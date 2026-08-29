@@ -3404,7 +3404,7 @@ function az_cycleStatus(id){
 }
 function az_set(id, field, val){
   const p = analyzerSamples.find(x=>x.id===id);
-  p[field] = numFrom(val);
+  if(p) p[field] = numFrom(val);
   render();
 }
 function az_setText(id, field, val){
@@ -4159,6 +4159,7 @@ function inv_commit(id){
 }
 function inv_set(id, field, val){
   const inv = findInvestment(id);
+  if(!inv) return;
   inv[field] = Math.max(0, numFrom(val));
   if(field==='rate') inv.rateDate = mkey(TODAY)+'-01';
   if(field==='balance') inv.balanceDate = mkey(TODAY)+'-01';
