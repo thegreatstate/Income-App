@@ -486,6 +486,14 @@ function spendParseImportText(text){
   }
   return {transactions, skipped};
 }
+/* In-app two-tap confirm for destructive Spend actions, instead of window.confirm() — native
+   dialogs can be silently suppressed depending on how the page is embedded (e.g. an iframe
+   without allow-modals), which made "Delete account" look like it just did nothing. First tap
+   arms it (re-rendering that one link as "Sure? Yes, delete / Cancel"); a second tap on "Yes,
+   delete" actually runs it. Keyed by type+id so arming one row doesn't affect any other. */
+function spend_armConfirm(type, id){ state.spendConfirm = {type, id: id||null}; render(); }
+function spend_cancelConfirm(){ state.spendConfirm = null; render(); }
+function spend_isArmed(type, id){ return !!(state.spendConfirm && state.spendConfirm.type===type && state.spendConfirm.id===(id||null)); }
 function spend_openImport(){
   const defaultAcct = spendAccounts.length===1 ? spendAccounts[0].id : null;
   openSheet({ type:'spendImport', acctId: defaultAcct, text:'' });
@@ -733,7 +741,6 @@ function spend_categoryDrop(targetId){
 
 /* ---- Spend's own settings ---- */
 function spend_resetAllData(){
-  if(!confirm('This clears every spending account, transaction, and category — nothing else in FinApp is touched. Continue?')) return;
   spendAccounts.length = 0;
   spendCategories.length = 0;
   spendCategories.push(...spendSeedCategories());
@@ -1391,6 +1398,7 @@ const state = { tab:'fvm', pushed:null, sheet:null, sheetEdit:false, propEdit:fa
   portfolioAnalyzerOpen:false,
   spendCompare:{ a:null, b:null },
   spendNav:{ screen:'accounts', currentAccountId:null },
+  spendConfirm:null, // {type, id} — in-app two-tap confirm, since native confirm() dialogs can be silently blocked depending on how the page is embedded
   planner:{}, analyzerSel:{}, azSections:{},
   cas:{ selectedId:'montana2', customBalance:350000, customRate:5.99, customTermYears:27,
     prepay:50000, grossReturn:4.5, taxRate:24, horizonKey:'5', horizonYearsCustom:5,
@@ -1550,7 +1558,7 @@ function togglePropEdit(){ state.propEdit = !state.propEdit; render(); }
 function backLabel(){ return {income:'Income', portfolio:'Portfolio', pl:'P&L'}[state.tab] || 'Back'; }
 function openSheet(view){ state.sheet=view; state.sheetEdit=false; state.plannerInfoOpen=false; state.azSections={}; for(const k in RAW) delete RAW[k]; render(); }
 function togglePlannerInfo(){ state.plannerInfoOpen=!state.plannerInfoOpen; render(); }
-function closeSheet(){ state.sheet=null; state.azSections={}; for(const k in RAW) delete RAW[k]; render(); }
+function closeSheet(){ state.sheet=null; state.azSections={}; state.spendConfirm=null; for(const k in RAW) delete RAW[k]; render(); }
 
 /* ============ RENDER ROOT ============ */
 function render(){
@@ -2295,7 +2303,10 @@ function renderSheet(){
       <div class="btn-row" style="margin-top:14px;">
         <div class="btn btn-primary" style="${canSave?'':'opacity:.5; pointer-events:none;'}" onclick="spend_saveAccountForm()">${editing?'Save':'Add'}</div>
       </div>
-      ${editing?`<div style="text-align:center; margin-top:12px;"><span class="link" style="color:var(--danger); font-size:13px;" onclick="if(confirm('Delete this account? This removes its whole transaction history.')) spend_deleteAccount('${s.editId}')">Delete account</span></div>`:''}
+      ${editing?`<div style="text-align:center; margin-top:12px;">${spend_isArmed('deleteAccount', s.editId)
+        ? `<span class="dim" style="font-size:12px;">Delete this account and its whole history? </span><span class="link" style="color:var(--danger); font-size:13px; font-weight:700;" onclick="spend_deleteAccount('${s.editId}')">Yes, delete</span> &middot; <span class="link" style="font-size:12px;" onclick="spend_cancelConfirm()">Cancel</span>`
+        : `<span class="link" style="color:var(--danger); font-size:13px;" onclick="spend_armConfirm('deleteAccount','${s.editId}')">Delete account</span>`
+      }</div>`:''}
     </div></div>`;
   }
   if(s.type==='spendTx'){
@@ -2319,7 +2330,10 @@ function renderSheet(){
       <div class="btn-row" style="margin-top:14px;">
         <div class="btn btn-primary" style="${canSave?'':'opacity:.5; pointer-events:none;'}" onclick="spend_saveTxForm()">${s.editId?'Save':'Add'}</div>
       </div>
-      ${s.editId?`<div style="text-align:center; margin-top:12px;"><span class="link" style="color:var(--danger); font-size:13px;" onclick="if(confirm('Delete this transaction?')) spend_deleteTx('${s.acctId}','${s.editId}')">Delete transaction</span></div>`:''}
+      ${s.editId?`<div style="text-align:center; margin-top:12px;">${spend_isArmed('deleteTx', s.editId)
+        ? `<span class="dim" style="font-size:12px;">Delete this transaction? </span><span class="link" style="color:var(--danger); font-size:13px; font-weight:700;" onclick="spend_deleteTx('${s.acctId}','${s.editId}')">Yes, delete</span> &middot; <span class="link" style="font-size:12px;" onclick="spend_cancelConfirm()">Cancel</span>`
+        : `<span class="link" style="color:var(--danger); font-size:13px;" onclick="spend_armConfirm('deleteTx','${s.editId}')">Delete transaction</span>`
+      }</div>`:''}
     </div></div>`;
   }
   if(s.type==='spendCategory'){
@@ -2356,7 +2370,10 @@ function renderSheet(){
       <div class="btn-row" style="margin-top:14px;">
         <div class="btn btn-primary" style="${canSave?'':'opacity:.5; pointer-events:none;'}" onclick="spend_saveRecurringForm()">Save</div>
       </div>
-      ${s.editId?`<div style="text-align:center; margin-top:12px;"><span class="link" style="color:var(--danger); font-size:13px;" onclick="if(confirm('Delete this recurring transaction?')) spend_deleteRecurring('${s.acctId}','${s.editId}')">Delete recurring transaction</span></div>`:''}
+      ${s.editId?`<div style="text-align:center; margin-top:12px;">${spend_isArmed('deleteRecurSheet', s.editId)
+        ? `<span class="dim" style="font-size:12px;">Delete this recurring transaction? </span><span class="link" style="color:var(--danger); font-size:13px; font-weight:700;" onclick="spend_deleteRecurring('${s.acctId}','${s.editId}')">Yes, delete</span> &middot; <span class="link" style="font-size:12px;" onclick="spend_cancelConfirm()">Cancel</span>`
+        : `<span class="link" style="color:var(--danger); font-size:13px;" onclick="spend_armConfirm('deleteRecurSheet','${s.editId}')">Delete recurring transaction</span>`
+      }</div>`:''}
     </div></div>`;
   }
   if(s.type==='spendImport'){
@@ -2405,7 +2422,10 @@ function renderSheet(){
       <div class="btn-row" style="margin-top:14px;">
         <div class="btn btn-primary" onclick="spend_runImport('append')">Add ${n} to existing</div>
       </div>
-      ${currentCount>0?`<div style="text-align:center; margin-top:10px;"><span class="link" style="color:var(--danger); font-size:12.5px;" onclick="if(confirm('This deletes all '+${currentCount}+' existing transactions in ${acct.name.replace(/'/g,"\\'")} first, then imports these '+${n}+'. Cannot be undone. Continue?')) spend_runImport('replace')">Replace all ${currentCount} existing transactions instead</span></div>`:''}
+      ${currentCount>0?`<div style="text-align:center; margin-top:10px;">${spend_isArmed('importReplace', s.acctId)
+        ? `<span class="dim" style="font-size:12px;">Delete all ${currentCount} existing, then import these ${n}? Cannot be undone. </span><span class="link" style="color:var(--danger); font-size:12.5px; font-weight:700;" onclick="spend_runImport('replace')">Yes, replace</span> &middot; <span class="link" style="font-size:12px;" onclick="spend_cancelConfirm()">Cancel</span>`
+        : `<span class="link" style="color:var(--danger); font-size:12.5px;" onclick="spend_armConfirm('importReplace','${s.acctId}')">Replace all ${currentCount} existing transactions instead</span>`
+      }</div>`:''}
       ` : (text.trim() ? `<div class="dim" style="font-size:12px; margin-top:10px; color:var(--danger);">Couldn&rsquo;t find any valid transaction rows in that &mdash; check it&rsquo;s pasted/loaded in full, header row included.</div>` : '')}
     </div></div>`;
   }
@@ -5056,7 +5076,10 @@ function renderSpendDetail(){
   const recurRows = (acct.recurring||[]).map(r=>`
     <div class="cost-row" style="margin-bottom:8px;">
       <div class="top"><span class="l">${r.description}</span><span class="v" style="color:${r.type==='withdrawal'?'var(--interest)':'var(--principal)'};">${r.type==='withdrawal'?'-':'+'}${spendFmt$(r.amount)}</span></div>
-      <div class="asof">${SPEND_FREQ_LABELS[r.frequency]||r.frequency} &middot; next ${spendFmtNextOccurrence(r)} &middot; <span class="link" style="font-size:10.5px;" onclick="spend_openRecurringForm('${acct.id}','${r.id}')">Edit</span> &middot; <span class="link" style="font-size:10.5px; color:var(--danger);" onclick="if(confirm('Delete this recurring transaction?')) spend_deleteRecurring('${acct.id}','${r.id}')">Delete</span></div>
+      <div class="asof">${SPEND_FREQ_LABELS[r.frequency]||r.frequency} &middot; next ${spendFmtNextOccurrence(r)} &middot; <span class="link" style="font-size:10.5px;" onclick="spend_openRecurringForm('${acct.id}','${r.id}')">Edit</span> &middot; ${spend_isArmed('deleteRecurRow', r.id)
+        ? `<span class="dim" style="font-size:10.5px;">Sure? </span><span class="link" style="font-size:10.5px; color:var(--danger); font-weight:700;" onclick="spend_deleteRecurring('${acct.id}','${r.id}')">Yes</span> &middot; <span class="link" style="font-size:10.5px;" onclick="spend_cancelConfirm()">Cancel</span>`
+        : `<span class="link" style="font-size:10.5px; color:var(--danger);" onclick="spend_armConfirm('deleteRecurRow','${r.id}')">Delete</span>`
+      }</div>
     </div>`).join('');
   const txRows = txs.map(t=>`
     <div class="row-line" style="cursor:pointer;" onclick="spend_openTxForm('${acct.id}','${t.id}')">
@@ -5108,7 +5131,10 @@ function renderSpendSettings(){
     <div class="toggle ${state.settings.spend.importVisible?'on':''}" onclick="spend_toggleImportVisible()"><div class="knob"></div></div>
   </div>
   ${state.settings.spend.importVisible?`<div class="row-line"><span class="l">Import transactions</span><button class="selectchip" onclick="spend_openImport()">Open</button></div>`:''}
-  <button class="reset-btn" style="width:100%; margin-top:22px; background:var(--surface-3); border:1px solid var(--border); color:var(--danger); font-weight:600; font-size:15px; padding:13px; border-radius:13px; cursor:pointer;" onclick="spend_resetAllData()">Reset Spending Data</button>
+  ${spend_isArmed('resetAll')
+    ? `<div style="text-align:center; margin-top:22px;"><div class="dim" style="font-size:12.5px; margin-bottom:8px;">Clear every spending account, transaction, and category? Nothing else in FinApp is touched. Cannot be undone.</div><button class="reset-btn" style="width:100%; background:var(--interest-soft); border:1px solid var(--danger); color:var(--danger); font-weight:700; font-size:15px; padding:13px; border-radius:13px; cursor:pointer;" onclick="spend_resetAllData()">Yes, reset spending data</button><div style="margin-top:8px;"><span class="link" style="font-size:12.5px;" onclick="spend_cancelConfirm()">Cancel</span></div></div>`
+    : `<button class="reset-btn" style="width:100%; margin-top:22px; background:var(--surface-3); border:1px solid var(--border); color:var(--danger); font-weight:600; font-size:15px; padding:13px; border-radius:13px; cursor:pointer;" onclick="spend_armConfirm('resetAll')">Reset Spending Data</button>`
+  }
   `;
 }
 function renderSpendCategories(){
