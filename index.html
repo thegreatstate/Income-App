@@ -259,6 +259,13 @@ details.legend-box p{ margin:8px 0 0; }
   .stage{ height:100dvh; min-height:100dvh; padding:0; }
   .phone{ width:100%; max-width:none; height:100dvh; max-height:none; border-radius:0; border:none; box-shadow:none; }
 }
+/* Rotated sideways on FVM/Income, the timeline table is the only thing worth the height —
+   the header/stat cards and jump-button row give it back. #fvmJump/#incomeJump are targeted
+   by id (not the shared .amort-jump class) so this doesn't also hide the jump rows on a
+   property/investment's own amortization or growth schedule. */
+@media (max-height:480px) and (orientation:landscape){
+  .tab-header-sticky, #fvmJump, #incomeJump, #incomeTimelineLabel{ display:none; }
+}
 </style>
 </head>
 <body>
@@ -943,6 +950,15 @@ function propertyCosts(prop){
 }
 function propertyCashFlow(prop){ return propertyRevenue(prop) - propertyCosts(prop).total; }
 function propertyOperatingProfit(prop){ return propertyRevenue(prop) - propertyCosts(prop).operatingTotal; }
+/* Splits one household growth number into "property side" (properties + personal loans)
+   and "investment side" shares, proportional to how much each side actually brought in —
+   spending is one shared draw with no natural per-source split of its own, so this is the
+   fairest default rather than assuming spending comes out of one side first. */
+function splitGrowthByIncome(growth, propTotal, invTotal){
+  const total = propTotal+invTotal;
+  if(Math.abs(total)<0.01) return {prop:0, inv:0};
+  return { prop: propTotal*growth/total, inv: invTotal*growth/total };
+}
 function propertyCashFlowAtDate(prop, date){
   if(prop.soldDate && date >= parseD(prop.soldDate)) return 0;
   const primary = prop.loans[0];
@@ -3457,6 +3473,7 @@ function renderIncome(){
   const propertySources = allSources.filter(s=>s.kind!=='investment');
   const investmentSources = allSources.filter(s=>s.kind==='investment');
   const committedInvestmentsCount = investments.filter(i=>i.committed!==false).length;
+  const gsplit = splitGrowthByIncome(growth, propertySources.reduce((s,x)=>s+x.amount,0), investmentSources.reduce((s,x)=>s+x.amount,0));
   return `
   <div class="tab-header-sticky">
     <div class="header" style="margin-bottom:14px;">
@@ -3469,7 +3486,7 @@ function renderIncome(){
     <div class="stat-row">
       <div class="stat-pill" style="cursor:pointer;" onclick="fvm_showBreakdown('receivables','${mkey(TODAY)}-01')"><div class="v" style="color:${total>=0?'var(--text)':'var(--interest)'};">${fmt$(total)}</div><div class="l">${fmtMonth(TODAY)}</div></div>
       <div class="stat-pill" style="cursor:pointer;" onclick="openSheet({type:'incomeAdjust'})"><div class="v">${fmt$(spending)}</div><div class="l">Income &rsaquo;</div></div>
-      <div class="stat-pill" style="cursor:pointer;" onclick="openSheet({type:'growthTarget'})"><div class="v" style="color:${growth>=0?'var(--principal)':'var(--interest)'}">${fmtSigned$(growth)}</div><div class="l">Growth &rsaquo;</div></div>
+      <div class="stat-pill" style="cursor:pointer;" onclick="openSheet({type:'growthTarget'})"><div class="v" style="color:${growth>=0?'var(--principal)':'var(--interest)'}; font-size:15px;">${fmt$(gsplit.prop)}/${fmt$(gsplit.inv)}</div><div class="l">Growth (Prop/Inv) &rsaquo;</div></div>
     </div>
     <div class="dim" style="font-size:11.5px; margin-top:10px; display:flex; justify-content:space-between; align-items:center;">
       <div>
@@ -3485,7 +3502,7 @@ function renderIncome(){
     </div>
   </div>
 
-  <div class="section-label" style="margin-top:0;">Monthly Timeline</div>
+  <div class="section-label" id="incomeTimelineLabel" style="margin-top:0;">Monthly Timeline</div>
   <div class="amort-jump" id="incomeJump">
     <button id="incomejump-yr1" onclick="income_yr1Jump()">1 yr</button>
     <button id="incomejump-yr5" onclick="income_yr5Jump()">5 yr</button>
@@ -4508,12 +4525,16 @@ function renderFVM(){
   const f = state.fvm;
   const firstReal = investments.find(i=>i.committed!==false);
   if(!f.selectedCol && firstReal) f.selectedCol = firstReal.id;
-  const totalMonthly = incomeSources().reduce((s,x)=>s+x.amount,0);
+  const sourcesToday = incomeSources();
+  const totalMonthly = sourcesToday.reduce((s,x)=>s+x.amount,0);
   const lump = fvmEffectiveLump();
   const {cols, gtSeries, growthSeries} = fvmBuildColumns();
   const totalInvBalance = investments.filter(i=>i.committed!==false).reduce((s,i)=>s+(i.balance||0),0);
   const spendingToday = effectiveSpendingAtDate(TODAY);
   const growthToday = totalMonthly - spendingToday;
+  const gsplit = splitGrowthByIncome(growthToday,
+    sourcesToday.filter(s=>s.kind!=='investment').reduce((s,x)=>s+x.amount,0),
+    sourcesToday.filter(s=>s.kind==='investment').reduce((s,x)=>s+x.amount,0));
 
   return `
   <div class="tab-header-sticky">
@@ -4526,7 +4547,7 @@ function renderFVM(){
     <div class="stat-row">
       <div class="stat-pill" style="cursor:pointer;" onclick="fvm_showBreakdown('receivables','${mkey(TODAY)}-01')"><div class="v" style="color:${totalMonthly>=0?'var(--text)':'var(--interest)'};">${fmt$(totalMonthly)}</div><div class="l">${fmtMonth(TODAY)}</div></div>
       <div class="stat-pill" style="cursor:pointer;" onclick="openSheet({type:'incomeAdjust'})"><div class="v">${fmt$(spendingToday)}</div><div class="l">Income &rsaquo;</div></div>
-      <div class="stat-pill" style="cursor:pointer;" onclick="openSheet({type:'growthTarget'})"><div class="v" style="color:${growthToday>=0?'var(--principal)':'var(--interest)'}">${fmtSigned$(growthToday)}</div><div class="l">Growth &rsaquo;</div></div>
+      <div class="stat-pill" style="cursor:pointer;" onclick="openSheet({type:'growthTarget'})"><div class="v" style="color:${growthToday>=0?'var(--principal)':'var(--interest)'}; font-size:15px;">${fmt$(gsplit.prop)}/${fmt$(gsplit.inv)}</div><div class="l">Growth (Prop/Inv) &rsaquo;</div></div>
     </div>
     <div class="dim" style="font-size:11.5px; margin-top:10px; display:flex; justify-content:space-between; align-items:center;">
       <div>
@@ -4574,6 +4595,13 @@ function renderFVM(){
 
 loadLocalData();
 render();
+// Rotating the phone doesn't touch app state, so nothing would otherwise trigger a re-render
+// to recompute the timeline table's max-height against the newly available screen space.
+window.addEventListener('resize', function(){
+  if(state.pushed || state.sheet) return;
+  if(state.tab==='fvm') timelineFitHeight('fvmWindow');
+  if(state.tab==='income') timelineFitHeight('incomeWindow');
+});
 </script>
 <script>
 if ('serviceWorker' in navigator) {
