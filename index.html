@@ -1069,8 +1069,7 @@ const state = { tab:'fvm', pushed:null, sheet:null, sheetEdit:false, propEdit:fa
   yr1Idx:-1, yr5Idx:-1, multCursor:-1, // shared jump-button cursors, same reason
   fvm:{ lump:500000, lumpDirection:'add', lumpDate:null, selectedCol:null,
     whatIfOpen:false, saleOpen:false, salePropId:null, salePrice:0, saleCostPct:7, saleTaxPct:20 },
-  lastSyncAt:null,
-  locked:false, lockError:false
+  lastSyncAt:null
 };
 
 /* ============ LOCAL PERSISTENCE + EXPORT/IMPORT ============ */
@@ -1211,33 +1210,12 @@ function openSheet(view){ state.sheet=view; state.sheetEdit=false; state.planner
 function togglePlannerInfo(){ state.plannerInfoOpen=!state.plannerInfoOpen; render(); }
 function closeSheet(){ state.sheet=null; state.azSections={}; for(const k in RAW) delete RAW[k]; render(); }
 
-function renderLockScreen(){
-  return `<div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; padding:32px 24px; text-align:center;">
-    <div style="font-size:32px; margin-bottom:14px;">&#128274;</div>
-    <input id="in-lock-pw" type="password" placeholder="Password" value=""
-      oninput="RAW['in-lock-pw']=this.value"
-      onkeydown="if(event.key==='Enter') lock_tryUnlock()"
-      style="width:100%; max-width:220px; background:var(--surface-3); border:1px solid ${state.lockError?'var(--danger)':'var(--border)'}; border-radius:10px; padding:12px 14px; color:var(--text); font-family:var(--font-ui); font-size:16px; text-align:center; outline:none; margin-bottom:14px;"/>
-    ${state.lockError?`<div class="dim" style="color:var(--danger); font-size:12.5px; margin:-6px 0 10px;">Wrong password.</div>`:''}
-    <div class="btn-row" style="width:100%; max-width:220px;"><div class="btn btn-primary" onclick="lock_tryUnlock()">Unlock</div></div>
-    <div style="margin-top:24px;"><span class="link" style="font-size:11px; color:var(--text-faint);" onclick="lock_forgot()">Forgot? Reset the password</span></div>
-  </div>`;
-}
 /* ============ RENDER ROOT ============ */
 function render(){
   const screen = document.getElementById('screen');
   const tabbar = document.getElementById('tabbar');
   const sheetLayer = document.getElementById('sheetLayer');
   document.getElementById('phone').classList.toggle('privacy-active', !!state.settings.privacyMode);
-  if(state.locked){
-    tabbar.style.display='none';
-    screen.innerHTML = renderLockScreen();
-    sheetLayer.innerHTML = '';
-    sheetLayer.style.pointerEvents = 'none';
-    const pwEl = document.getElementById('in-lock-pw');
-    if(pwEl) pwEl.focus();
-    return;
-  }
   let html = '';
   if(state.pushed){
     if(state.pushed.type==='loan') html = renderLoanDetail(state.pushed.id);
@@ -1956,24 +1934,6 @@ function renderSheet(){
   const s = state.sheet;
   if(s.type==='planner'){
     return renderPlannerSheet(s.id);
-  }
-  if(s.type==='appLockSetup'){
-    const pw1 = RAW['in-lock-new1']||'', pw2 = RAW['in-lock-new2']||'';
-    const mismatch = pw2.length>0 && pw1!==pw2;
-    const canSave = pw1.length>0 && pw1===pw2;
-    return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
-      <div class="sheet-handle"></div>
-      ${sheetHead('App Password', appLock_isSet()?'Change the password':'Set a password to hide this app until it&rsquo;s entered', false)}
-      <div class="dim" style="font-size:12px; margin-bottom:2px;">New password</div>
-      <div class="input-row"><input id="in-lock-new1" type="password" value="${pw1}" oninput="RAW['in-lock-new1']=this.value; render()" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:16px;font-weight:600;outline:none;width:100%;"/></div>
-      <div class="dim" style="font-size:12px; margin:10px 0 2px;">Confirm</div>
-      <div class="input-row"><input id="in-lock-new2" type="password" value="${pw2}" oninput="RAW['in-lock-new2']=this.value; render()" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:16px;font-weight:600;outline:none;width:100%;"/></div>
-      ${mismatch?`<div class="dim" style="font-size:11px; color:var(--danger); margin-top:6px;">Doesn&rsquo;t match yet.</div>`:''}
-      <div class="btn-row" style="margin-top:14px;">
-        <div class="btn btn-primary" style="${canSave?'':'opacity:.5; pointer-events:none;'}" onclick="lock_savePassword()">Save</div>
-      </div>
-      <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Stored only on this device, in this browser &mdash; not part of your data export, and not real security (nothing here is encrypted). It just keeps the app from sitting open on screen until this is typed in.</div></details>
-    </div></div>`;
   }
   if(s.type==='incomeAdjust'){
     const baseline = state.settings.monthlySpending||0;
@@ -3984,39 +3944,6 @@ function renderGoalsPlaceholder(){
 /* ============ SETTINGS ============ */
 function toggleSetting(key){ state.settings[key] = !state.settings[key]; render(); }
 function settings_setNumberStyle(v){ state.settings.numberStyle = v; render(); }
-/* App lock — a curtain, not a lock box. Stored on its own key (not inside the exported/
-   synced settings blob), plain text, no hashing: this is meant to keep the app from just
-   sitting open on screen, not to withstand anyone who actually tries. Never gates the
-   underlying data itself, only whether render() draws the real UI or the lock screen. */
-const APP_LOCK_KEY = 'finapp-lock-pin';
-function appLock_isSet(){ try{ return !!localStorage.getItem(APP_LOCK_KEY); }catch(e){ return false; } }
-function appLock_check(pw){ try{ return localStorage.getItem(APP_LOCK_KEY)===pw; }catch(e){ return false; } }
-function appLock_set(pw){ try{ localStorage.setItem(APP_LOCK_KEY, pw); }catch(e){} }
-function appLock_clear(){ try{ localStorage.removeItem(APP_LOCK_KEY); }catch(e){} }
-function lock_openSetup(){ openSheet({type:'appLockSetup'}); }
-function lock_savePassword(){
-  const pw1 = RAW['in-lock-new1']||'', pw2 = RAW['in-lock-new2']||'';
-  if(!pw1 || pw1!==pw2) return;
-  appLock_set(pw1);
-  delete RAW['in-lock-new1']; delete RAW['in-lock-new2'];
-  closeSheet();
-}
-function lock_removePassword(){
-  if(!confirm('Remove the app password? Anyone who opens this will see everything immediately, no prompt.')) return;
-  appLock_clear();
-  render();
-}
-function lock_tryUnlock(){
-  const pw = RAW['in-lock-pw']||'';
-  if(appLock_check(pw)){ state.locked=false; state.lockError=false; delete RAW['in-lock-pw']; render(); }
-  else { state.lockError=true; render(); }
-}
-function lock_forgot(){
-  if(!confirm('This clears only the saved app password — your financial data stays exactly as it is, nothing here touches that. Continue?')) return;
-  appLock_clear();
-  state.locked=false; state.lockError=false;
-  render();
-}
 function tax_toggleEnabled(){ state.settings.tax.enabled = !state.settings.tax.enabled; render(); }
 function tax_addBracket(){ state.settings.tax.fedBrackets.push({threshold:0, rate:0}); render(); }
 function tax_removeBracket(i){ state.settings.tax.fedBrackets.splice(i,1); render(); }
@@ -4089,9 +4016,7 @@ function renderSettings(){
         <button class="${s.numberStyle==='rounded'?'active':''}" onclick="settings_setNumberStyle('rounded')">Rounded</button>
         <button class="${s.numberStyle==='compact'?'active':''}" onclick="settings_setNumberStyle('compact')">Compact (K/M)</button>
       </div>
-      <div class="settings-row"><div><div class="l">App lock</div><div class="sub">${appLock_isSet()?'A password hides the app until it&rsquo;s entered':'Not set &mdash; the app opens straight to your data'}</div></div>
-        <button class="selectchip" onclick="lock_openSetup()">${appLock_isSet()?'Change':'Set password'}</button></div>
-      ${appLock_isSet()?`<div style="text-align:right; margin-top:-4px;"><span class="link" style="color:var(--danger); font-size:12px;" onclick="lock_removePassword()">Remove password</span></div>`:''}
+      <div class="row-line"><span class="l">Personal spending</span><button class="selectchip" onclick="openSheet({type:'incomeAdjust'})">Open</button></div>
       <div class="row-line" style="margin-top:4px;"><span class="l">Last synced</span><span class="v" style="font-family:var(--font-ui); font-weight:600; font-size:13px;">${state.lastSyncAt?fmtDateTime(state.lastSyncAt):'Never'}</span></div>
       <div class="row-line"><span class="l">Export data (.json)</span><button class="selectchip" onclick="exportData()">Export</button></div>
       <div class="row-line"><span class="l">Import data (.json)</span><button class="selectchip" onclick="triggerImport()">Import</button></div>
@@ -4677,7 +4602,6 @@ function renderFVM(){
 }
 
 loadLocalData();
-state.locked = appLock_isSet();
 render();
 // Rotating the phone doesn't touch app state, so nothing would otherwise trigger a re-render
 // to recompute the timeline table's max-height against the newly available screen space.
