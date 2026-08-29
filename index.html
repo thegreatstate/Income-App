@@ -5080,7 +5080,7 @@ function renderSpendDetail(){
   </div>
   <div class="card" style="padding:14px 16px;">
     <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
-      <div style="font-size:18px; font-weight:700;">${acct.name}</div>
+      <div style="font-size:18px; font-weight:700; cursor:pointer;" onclick="spend_openAccountForm('${acct.id}')">${acct.name} <span class="dim" style="font-size:12px; font-weight:400;">&#9998;</span></div>
       <div style="display:flex; gap:8px;">
         <div class="iconbtn" style="width:26px; height:26px; color:var(--principal); font-weight:800; font-size:16px;" onclick="spend_openTxForm('${acct.id}', null, 'deposit')">+</div>
         <div class="iconbtn" style="width:26px; height:26px; color:var(--interest); font-weight:800; font-size:16px;" onclick="spend_openTxForm('${acct.id}', null, 'withdrawal')">&minus;</div>
