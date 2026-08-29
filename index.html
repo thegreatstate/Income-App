@@ -435,6 +435,70 @@ function spendCategoryName(id){ const c=spendCategories.find(c=>c.id===id); retu
    of the app's display style. */
 function spendFmt$(n){ n = Math.round(n*100)/100 || 0; return '$'+n.toLocaleString('en-US',{minimumFractionDigits:0, maximumFractionDigits:0}); }
 function spendFmtSigned$(n){ return (n<0?'-':'+')+spendFmt$(Math.abs(n)); }
+/* ---- one-time historical import from another app's export. Handles both a real comma CSV
+   (quote-aware, so a description with a comma in it or a "1,000.00" thousand-separator amount
+   parses correctly) and a tab-separated paste straight out of a spreadsheet — either way it
+   expects Date/Time/Description/Outgoing/Income columns and ignores whatever balance columns
+   are there, since Spend always computes balance fresh from the transactions themselves. */
+function spendParseCsvLine(line){
+  const out = []; let cur = '', inQuotes = false;
+  for(let i=0;i<line.length;i++){
+    const c = line[i];
+    if(inQuotes){
+      if(c==='"'){ if(line[i+1]==='"'){ cur+='"'; i++; } else inQuotes=false; }
+      else cur += c;
+    } else {
+      if(c==='"') inQuotes = true;
+      else if(c===',') { out.push(cur); cur=''; }
+      else cur += c;
+    }
+  }
+  out.push(cur);
+  return out;
+}
+function spendParseImportDate(s){
+  const m = (s||'').trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if(!m) return null;
+  let [, mo, da, yr] = m;
+  if(yr.length===2) yr = '20'+yr;
+  return yr+'-'+mo.padStart(2,'0')+'-'+da.padStart(2,'0');
+}
+function spendParseImportText(text){
+  const lines = (text||'').split(/\r?\n/).map(l=>l.replace(/\r$/,'')).filter(l=>l.trim().length>0);
+  if(!lines.length) return {transactions:[], skipped:0};
+  const headerIdx = lines.findIndex(l=>/date/i.test(l) && /description/i.test(l));
+  const startIdx = headerIdx>=0 ? headerIdx+1 : 0;
+  const isTab = (lines[headerIdx>=0?headerIdx:0]||'').includes('\t');
+  const transactions = [];
+  let skipped = 0;
+  for(let i=startIdx;i<lines.length;i++){
+    const raw = isTab ? lines[i].split('\t') : spendParseCsvLine(lines[i]);
+    const c = raw.map(x=>(x||'').trim());
+    if(c.length<5){ skipped++; continue; }
+    const date = spendParseImportDate(c[0]);
+    if(!date){ skipped++; continue; }
+    const desc = c[2]||'';
+    const outgoing = numFrom(c[3]);
+    const income = numFrom(c[4]);
+    if(!outgoing && !income){ skipped++; continue; }
+    const amount = income>0 ? income : -outgoing;
+    transactions.push({ id:spendUid(), date, description: desc || (amount<0?'Withdrawal':'Deposit'), amount });
+  }
+  return {transactions, skipped};
+}
+function spend_openImport(acctId){ openSheet({ type:'spendImport', acctId, text:'' }); }
+function spend_runImport(mode){
+  const s = state.sheet;
+  const acct = spendGetAccount(s.acctId);
+  const text = RAW['in-spend-import-text']!==undefined ? RAW['in-spend-import-text'] : (s.text||'');
+  const parsed = spendParseImportText(text);
+  if(!parsed.transactions.length) return;
+  if(mode==='replace') acct.transactions = [];
+  acct.transactions.push(...parsed.transactions);
+  saveLocalData();
+  delete RAW['in-spend-import-text'];
+  closeSheet();
+}
 function spendTodayISO(){ const d=new Date(); return d.toISOString().slice(0,10); }
 function spendFmtDate(iso){
   const d = new Date(iso+'T00:00:00');
@@ -2278,6 +2342,35 @@ function renderSheet(){
       ${s.editId?`<div style="text-align:center; margin-top:12px;"><span class="link" style="color:var(--danger); font-size:13px;" onclick="if(confirm('Delete this recurring transaction?')) spend_deleteRecurring('${s.acctId}','${s.editId}')">Delete recurring transaction</span></div>`:''}
     </div></div>`;
   }
+  if(s.type==='spendImport'){
+    const acct = spendGetAccount(s.acctId);
+    const text = rv('in-spend-import-text', s.text);
+    const parsed = spendParseImportText(text);
+    const n = parsed.transactions.length;
+    const netTotal = parsed.transactions.reduce((sum,t)=>sum+t.amount,0);
+    const datesSorted = parsed.transactions.map(t=>t.date).sort();
+    const dateRange = n ? `${spendFmtDate(datesSorted[0])} &ndash; ${spendFmtDate(datesSorted[n-1])}` : '';
+    const currentCount = acct.transactions.length;
+    const currentBal = spendBalanceOf(acct);
+    return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet full">
+      <div class="sheet-handle"></div>
+      ${sheetHead('Import Transactions', acct.name, false)}
+      <div class="dim" style="font-size:12px; margin-bottom:4px;">Paste the exported data below (Date / Description / Outgoing / Income columns, header row included). One-time thing &mdash; from here on it just lives in this account.</div>
+      <textarea id="in-spend-import-text" placeholder="Paste here&hellip;" oninput="RAW['in-spend-import-text']=this.value; render()" style="width:100%; min-height:130px; background:var(--surface-3); border:1px solid var(--border); border-radius:10px; padding:10px 12px; color:var(--text); font-family:var(--font-mono); font-size:11.5px; resize:vertical;">${text}</textarea>
+      ${n>0 ? `
+      <div class="card" style="margin-top:12px;">
+        <div class="row-line"><span class="l">Transactions found</span><span class="v">${n}${parsed.skipped?` <span class="faint">(${parsed.skipped} skipped)</span>`:''}</span></div>
+        <div class="row-line"><span class="l">Date range</span><span class="v" style="font-weight:400;">${dateRange}</span></div>
+        <div class="row-line"><span class="l">Net total</span><span class="v" style="color:${netTotal>=0?'var(--principal)':'var(--interest)'};">${spendFmtSigned$(netTotal)}</span></div>
+      </div>
+      <div class="dim" style="font-size:11px; margin-top:10px;">${acct.name} currently has ${currentCount} transaction${currentCount===1?'':'s'} totaling ${spendFmt$(currentBal)}.</div>
+      <div class="btn-row" style="margin-top:14px;">
+        <div class="btn btn-primary" onclick="spend_runImport('append')">Add ${n} to existing</div>
+      </div>
+      ${currentCount>0?`<div style="text-align:center; margin-top:10px;"><span class="link" style="color:var(--danger); font-size:12.5px;" onclick="if(confirm('This deletes all '+${currentCount}+' existing transactions in ${acct.name.replace(/'/g,"\\'")} first, then imports these '+${n}+'. Cannot be undone. Continue?')) spend_runImport('replace')">Replace all ${currentCount} existing transactions instead</span></div>`:''}
+      ` : (text.trim() ? `<div class="dim" style="font-size:12px; margin-top:10px; color:var(--danger);">Couldn&rsquo;t find any valid transaction rows in that &mdash; check it&rsquo;s pasted in full, header row included.</div>` : '')}
+    </div></div>`;
+  }
   if(s.type==='incomeAdjust'){
     const baseline = state.settings.monthlySpending||0;
     const pctOfInterest = state.settings.spendingPctOfInterest||0;
@@ -2543,7 +2636,7 @@ function renderSheet(){
   if(s.type==='fvmColDetail'){
     return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
       <div class="sheet-handle"></div>
-      ${sheetHead(state.fvm.selectedCol==='gt' ? 'Grand Total' : displayName(findInvestment(state.fvm.selectedCol)) || 'Account', '', false)}
+      ${sheetHead(state.fvm.selectedCol==='gt' ? 'Grand Total' : state.fvm.selectedCol==='growth' ? 'Growth' : displayName(findInvestment(state.fvm.selectedCol)) || 'Account', '', false)}
       ${fvmSelectedDetailCard()}
     </div></div>`;
   }
@@ -4763,8 +4856,9 @@ function fvm_commitWhatIf(status){
   closeSheet();
 }
 function fvmActiveSeries(){
-  const {cols, gtSeries} = fvmBuildColumns();
+  const {cols, gtSeries, growthSeries} = fvmBuildColumns();
   if(state.fvm.selectedCol==='gt') return gtSeries;
+  if(state.fvm.selectedCol==='growth') return growthSeries;
   const col = cols.find(c=>c.id===state.fvm.selectedCol);
   return col ? col.series : gtSeries;
 }
@@ -4852,6 +4946,9 @@ function fvmSelectedDetailCard(){
   const f = state.fvm;
   if(f.selectedCol==='gt'){
     return `<div class="dim" style="font-size:12.5px;">Every investment balance added together &mdash; the liquid, sellable part of your net worth. Doesn't include property value, since that's latent until sold.</div>`;
+  }
+  if(f.selectedCol==='growth'){
+    return `<div class="dim" style="font-size:12.5px;">Property cash flow plus investment interest, minus your monthly draw &mdash; what's actually left over each month. The 2&times; button now cycles through when growth itself doubles, quadruples, and so on from today's figure.</div>`;
   }
   const inv = findInvestment(f.selectedCol);
   if(!inv) return '';
@@ -4956,6 +5053,7 @@ function renderSpendDetail(){
   ${(acct.recurring||[]).length ? `<div class="section-label">Recurring</div>${recurRows}` : ''}
   <div class="section-label">Transactions</div>
   ${txs.length ? `<div class="card">${txRows}</div>` : `<div class="dim" style="font-size:13px;">No transactions yet.</div>`}
+  <div style="text-align:right; margin-top:10px;"><span class="link" style="font-size:12px;" onclick="spend_openImport('${acct.id}')">Import transactions &rsaquo;</span></div>
   <div style="height:6px;"></div>
   `;
 }
@@ -5040,7 +5138,7 @@ function renderFVM(){
   <table class="amort">
     <thead><tr>
       <th>Date</th>
-      <th>Growth</th>
+      <th style="cursor:pointer; ${f.selectedCol==='growth'?'color:var(--accent); text-decoration:underline;':''}" onclick="fvm_selectCol('growth')">Growth</th>
       <th style="cursor:pointer; ${f.selectedCol==='gt'?'color:var(--accent); text-decoration:underline;':''}" onclick="fvm_selectCol('gt')">Grand Total</th>
       ${cols.map(c=>`<th style="cursor:pointer; ${c.id===f.selectedCol?'color:var(--accent); text-decoration:underline;':''}" onclick="fvm_selectCol('${c.id}')">${(c.boosted?(lump>0?'+ ':'&minus; '):'')+(c.label.length>11?c.label.slice(0,10)+'&hellip;':c.label)}</th>`).join('')}
     </tr></thead>
@@ -5052,7 +5150,7 @@ function renderFVM(){
       const gs = splitGrowthByIncome(g, growthPropSeries[i], growthInvSeries[i]);
       return `<tr id="fvmrow-${i}" class="${timelineRowClass(i, FVM_MONTHS)}">
         <td style="cursor:pointer;" onclick="timelineHighlightDate('${mkey(date)}')">${fmtMonth(date)}</td>
-        <td style="cursor:pointer; color:${g>=0?'var(--principal)':'var(--interest)'};" onclick="fvm_showBreakdown('growth','${dateStr}')">${fmt$(gs.prop)}/${fmt$(gs.inv)}</td>
+        <td style="cursor:pointer; color:${g>=0?'var(--principal)':'var(--interest)'}; ${f.selectedCol==='growth'?'font-weight:700;':''}" onclick="fvm_showBreakdown('growth','${dateStr}')">${fmt$(gs.prop)}/${fmt$(gs.inv)}</td>
         <td style="cursor:pointer; ${f.selectedCol==='gt'?'font-weight:700; color:var(--principal);':''}" onclick="fvm_showBreakdown('total','${dateStr}')">${fmt$(gtSeries[i])}</td>
         ${cols.map(c=>`<td style="cursor:pointer; ${c.id===f.selectedCol?'font-weight:700; color:var(--principal);':''}" onclick="inv_openCellAction('${c.id}','${dateStr}')">${fmt$(c.series[i])}</td>`).join('')}
       </tr>`;
