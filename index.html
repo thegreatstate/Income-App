@@ -376,7 +376,14 @@ function netWorthTotals(){
   properties.forEach(p=>{ const eq = propertyEquity(p); if(eq!=null){ valuedCount++; equity += eq; } });
   const invTotal = investments.filter(i=>i.committed!==false).reduce((s,i)=>s+(i.balance||0),0);
   let otherLoansTotal = 0;
-  properties.forEach(p=>(p.otherLoans||[]).forEach(l=>{ otherLoansTotal += currentRow(l.id).balance; }));
+  // A property's remodel loans are already netted into its own equity above (propertyCurrent's
+  // balance includes them) — only count them here when equity was null (no value set yet, so
+  // that debt wouldn't be reflected anywhere otherwise). Counting both double-subtracts real
+  // remodel-loan debt from net worth for every valued property that has one.
+  properties.forEach(p=>{
+    if(propertyEquity(p)!=null) return;
+    (p.otherLoans||[]).forEach(l=>{ otherLoansTotal += currentRow(l.id).balance; });
+  });
   standaloneLoans.forEach(l=>{ if(l.committed!==false) otherLoansTotal += currentRow(l.id).balance; });
   return { netWorth: equity+invTotal-otherLoansTotal, equity, invTotal, otherLoansTotal, valuedCount, totalProps: properties.length, unvaluedCount: properties.length-valuedCount };
 }
