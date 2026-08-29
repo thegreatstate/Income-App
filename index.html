@@ -3947,7 +3947,12 @@ function renderPrepayAnalysis(){
 /* ============ INCOME (real estate + investments, combined) ============ */
 const INCOME_MONTHS_AHEAD = 600; // 50 years — long enough for full lifetime planning
 function incomeSourceAge(src){
-  if(src.kind==='property'){ return parseD(findProperty(src.id.slice(5)).loans[0].start).getTime(); }
+  // A debt-free property has no loan to read a start date from — same "no date info"
+  // fallback the loan/investment branches below already use.
+  if(src.kind==='property'){
+    const prop = findProperty(src.id.slice(5));
+    return prop.loans.length ? parseD(prop.loans[0].start).getTime() : Infinity;
+  }
   if(src.kind==='loan'){ const l=findStandaloneLoan(src.id.slice(5)); return l ? parseD(l.start).getTime() : Infinity; }
   const inv = findInvestment(src.id.slice(4));
   return inv && inv.balanceDate ? parseD(inv.balanceDate).getTime() : Infinity;
