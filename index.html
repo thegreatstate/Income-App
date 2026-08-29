@@ -413,6 +413,261 @@ const standaloneLoans = [];
 let _nextSpendingOverrideId = 1;
 function newSpendingOverrideId(){ return 'sov'+(_nextSpendingOverrideId++); }
 const householdSpendingOverrides = [];
+/* ---- Personal spending log ("Spent") — envelope-style accounts with a real transaction
+   history, ported from a standalone companion app (same data shape, restyled to live inside
+   FinApp). No stored balance field anywhere: an account's balance is always sum(transactions),
+   so there's never a separate number to keep in sync. Kept entirely separate from FVM's own
+   "monthly draw" assumption (state.settings.monthlySpending) — this is a real log of what
+   actually happened, not a projection input; nothing here feeds FVM's math. */
+function spendUid(){ return 'sp'+Math.random().toString(36).slice(2,10); }
+function spendSeedCategories(){
+  return ['Spending Money','General','Food','Rent','Fuel','Fun','Bills','Income','Other'].map((name,i)=>({id:spendUid(), name, enabled:true, order:i}));
+}
+const spendAccounts = [];
+const spendCategories = spendSeedCategories();
+function spendBalanceOf(acct){ return acct.transactions.reduce((s,t)=>s+t.amount,0); }
+function spendTotalBalance(){ return spendAccounts.reduce((s,a)=>s+spendBalanceOf(a),0); }
+function spendGetAccount(id){ return spendAccounts.find(a=>a.id===id); }
+function spendCategoryName(id){ const c=spendCategories.find(c=>c.id===id); return c?c.name:''; }
+function spendTodayISO(){ const d=new Date(); return d.toISOString().slice(0,10); }
+function spendFmtDate(iso){
+  const d = new Date(iso+'T00:00:00');
+  return d.toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
+}
+const SPEND_FREQ_LABELS = { weekly:'Weekly', biweekly:'Biweekly', monthly:'Monthly', yearly:'Yearly' };
+/* ---- recurring materialization: walks each rule from firstDate forward, creating a real
+   transaction for every occurrence now due. Idempotent (checks recurringId+recurringOcc
+   before inserting), so calling this repeatedly — every time the Spend view renders — never
+   double-posts. No live heartbeat needed since there's no fast test-frequency to watch post. */
+function spendRuleStartMs(rule){ return new Date(rule.firstDate).getTime(); }
+function spendAddFreqMs(ms, freq){
+  const d = new Date(ms);
+  if(freq==='weekly') d.setDate(d.getDate()+7);
+  else if(freq==='biweekly') d.setDate(d.getDate()+14);
+  else if(freq==='monthly') d.setMonth(d.getMonth()+1);
+  else if(freq==='yearly') d.setFullYear(d.getFullYear()+1);
+  return d.getTime();
+}
+function spendNextOccurrenceMs(rule){
+  let ms = spendRuleStartMs(rule);
+  const nowMs = Date.now();
+  let guard=0;
+  while(ms<=nowMs && guard<2000){ ms=spendAddFreqMs(ms, rule.frequency); guard++; }
+  return ms;
+}
+function spendFmtNextOccurrence(rule){ return spendFmtDate(new Date(spendNextOccurrenceMs(rule)).toISOString().slice(0,10)); }
+function spendMaterializeRecurring(){
+  const nowMs = Date.now();
+  let changed = false;
+  spendAccounts.forEach(acct=>{
+    (acct.recurring||[]).forEach(rule=>{
+      let occMs = spendRuleStartMs(rule);
+      let guard = 0;
+      while(occMs <= nowMs && guard < 2000){
+        const occKey = new Date(occMs).toISOString();
+        const exists = acct.transactions.some(tx=>tx.recurringId===rule.id && tx.recurringOcc===occKey);
+        if(!exists){
+          acct.transactions.push({
+            id:spendUid(), date:occKey.slice(0,10), description:rule.description,
+            amount: rule.type==='deposit' ? rule.amount : -rule.amount,
+            recurringId:rule.id, recurringOcc:occKey
+          });
+          changed = true;
+        }
+        occMs = spendAddFreqMs(occMs, rule.frequency);
+        guard++;
+      }
+    });
+  });
+  if(changed) saveLocalData();
+}
+
+/* ---- navigation — a small self-contained screen stack (accounts/detail/settings/categories)
+   inside FinApp's single push({type:'spend'}) slot, mirroring how the standalone app manages
+   its own state.screen. Simple Mode (default on) skips straight to the one account's Detail
+   screen when exactly one exists, same gating as the standalone app. */
+function spend_open(){
+  if(state.settings.spend.simpleMode && spendAccounts.length===1){
+    state.spendNav.screen='detail'; state.spendNav.currentAccountId=spendAccounts[0].id;
+  } else {
+    state.spendNav.screen='accounts';
+  }
+  push({type:'spend'});
+}
+function spend_isHome(acct){
+  return !!(acct && state.settings.spend.simpleMode && spendAccounts.length===1 && acct.id===spendAccounts[0].id);
+}
+function spend_openAccount(id){ state.spendNav.currentAccountId=id; state.spendNav.screen='detail'; render(); }
+function spend_detailBack(){ state.spendNav.screen = 'accounts'; render(); }
+function spend_openSettings(){ state.spendNav.settingsFrom = state.spendNav.screen; state.spendNav.screen='settings'; render(); }
+function spend_settingsBack(){ state.spendNav.screen = state.spendNav.settingsFrom || 'accounts'; render(); }
+function spend_categoriesBack(){ state.spendNav.screen='settings'; render(); }
+
+/* ---- account CRUD ---- */
+function spend_openAccountForm(id){
+  const acct = id ? spendGetAccount(id) : null;
+  openSheet({ type:'spendAccount', editId:id, name: acct?acct.name:'', amount:'', kind:'deposit' });
+}
+function spend_setAccountKind(k){ state.sheet.kind=k; render(); }
+function spend_saveAccountForm(){
+  const s = state.sheet;
+  const name = (RAW['in-spend-acct-name']!==undefined ? RAW['in-spend-acct-name'] : s.name || '').trim();
+  if(!name) return;
+  if(s.editId){
+    spendGetAccount(s.editId).name = name;
+  } else {
+    const amtRaw = numFrom(RAW['in-spend-acct-amt']!==undefined ? RAW['in-spend-acct-amt'] : s.amount);
+    const signed = s.kind==='withdrawal' ? -Math.abs(amtRaw) : Math.abs(amtRaw);
+    spendAccounts.push({ id:spendUid(), name, recurring:[], transactions: signed!==0 ? [{id:spendUid(), date:spendTodayISO(), description:'Starting Balance', amount:signed}] : [] });
+  }
+  saveLocalData();
+  closeSheet();
+}
+function spend_deleteAccount(id){
+  const idx = spendAccounts.findIndex(a=>a.id===id);
+  if(idx>=0) spendAccounts.splice(idx,1);
+  saveLocalData();
+  closeSheet();
+  state.spendNav.screen='accounts';
+  render();
+}
+
+/* ---- transaction CRUD ---- */
+function spend_openTxForm(acctId, txId, presetType){
+  const acct = spendGetAccount(acctId);
+  const tx = txId ? acct.transactions.find(t=>t.id===txId) : null;
+  const type = tx ? (tx.amount<0?'withdrawal':'deposit') : (presetType||'deposit');
+  openSheet({ type:'spendTx', acctId, editId:txId, kind:type,
+    amount: tx? Math.abs(tx.amount) : '', description: tx? tx.description : '',
+    category: tx? (tx.category||'') : '', categoryPickerOpen:false });
+}
+function spend_toggleCatPicker(){ state.sheet.categoryPickerOpen = !state.sheet.categoryPickerOpen; render(); }
+function spend_pickCategory(id){ state.sheet.category = id; state.sheet.categoryPickerOpen = false; render(); }
+function spend_saveTxForm(){
+  const s = state.sheet;
+  const acct = spendGetAccount(s.acctId);
+  const amt = numFrom(RAW['in-spend-tx-amt']!==undefined ? RAW['in-spend-tx-amt'] : s.amount);
+  const descRaw = (RAW['in-spend-tx-desc']!==undefined ? RAW['in-spend-tx-desc'] : s.description || '').trim();
+  const desc = descRaw || (s.kind==='deposit'?'Deposit':'Withdrawal');
+  const category = s.category || '';
+  const signed = s.kind==='withdrawal' ? -Math.abs(amt) : Math.abs(amt);
+  if(s.editId){
+    const tx = acct.transactions.find(t=>t.id===s.editId);
+    tx.amount = signed; tx.description = desc; tx.category = category;
+  } else {
+    acct.transactions.push({ id:spendUid(), date:spendTodayISO(), description:desc, amount:signed, category });
+  }
+  saveLocalData();
+  closeSheet();
+}
+function spend_deleteTx(acctId, txId){
+  const acct = spendGetAccount(acctId);
+  acct.transactions = acct.transactions.filter(t=>t.id!==txId);
+  saveLocalData();
+  closeSheet();
+  render();
+}
+
+/* ---- recurring CRUD ---- */
+function spend_openRecurringForm(acctId, ruleId){
+  const acct = spendGetAccount(acctId);
+  const rule = ruleId ? acct.recurring.find(r=>r.id===ruleId) : null;
+  openSheet({ type:'spendRecurring', acctId, editId:ruleId,
+    description: rule? rule.description:'', amount: rule? rule.amount:'',
+    frequency: rule? rule.frequency:'monthly', firstDate: rule? rule.firstDate: spendTodayISO(),
+    kind: rule? rule.type:'deposit' });
+}
+function spend_setRecurFrequency(f){ state.sheet.frequency=f; render(); }
+function spend_setRecurKind(k){ state.sheet.kind=k; render(); }
+function spend_saveRecurringForm(){
+  const s = state.sheet;
+  const acct = spendGetAccount(s.acctId);
+  const desc = (RAW['in-spend-recur-desc']!==undefined ? RAW['in-spend-recur-desc'] : s.description || '').trim();
+  const amt = numFrom(RAW['in-spend-recur-amt']!==undefined ? RAW['in-spend-recur-amt'] : s.amount);
+  const freq = s.frequency;
+  const first = RAW['in-spend-recur-date']!==undefined ? RAW['in-spend-recur-date'] : (s.firstDate||spendTodayISO());
+  if(!desc || amt<=0) return;
+  acct.recurring = acct.recurring||[];
+  if(s.editId){
+    const rule = acct.recurring.find(r=>r.id===s.editId);
+    Object.assign(rule, { description:desc, amount:amt, frequency:freq, firstDate:first, type:s.kind });
+  } else {
+    acct.recurring.push({ id:spendUid(), description:desc, amount:amt, frequency:freq, firstDate:first, type:s.kind });
+  }
+  saveLocalData();
+  closeSheet();
+}
+function spend_deleteRecurring(acctId, ruleId){
+  const acct = spendGetAccount(acctId);
+  acct.recurring = acct.recurring.filter(r=>r.id!==ruleId);
+  saveLocalData();
+  closeSheet();
+  render();
+}
+
+/* ---- category CRUD ---- */
+function spend_openCategoryForm(id){
+  const cat = id ? spendCategories.find(c=>c.id===id) : null;
+  openSheet({ type:'spendCategory', editId:id, name: cat? cat.name:'' });
+}
+function spend_saveCategoryForm(){
+  const s = state.sheet;
+  const name = (RAW['in-spend-cat-name']!==undefined ? RAW['in-spend-cat-name'] : s.name || '').trim();
+  if(!name) return;
+  if(s.editId){
+    spendCategories.find(c=>c.id===s.editId).name = name;
+  } else {
+    spendCategories.push({ id:spendUid(), name, enabled:true, order:spendCategories.length });
+  }
+  saveLocalData();
+  closeSheet();
+}
+function spend_toggleCategoryEnabled(id){
+  const c = spendCategories.find(c=>c.id===id);
+  c.enabled = !c.enabled;
+  saveLocalData();
+  render();
+}
+let _spendDragCatId = null;
+function spend_categoryDragStart(id){ _spendDragCatId = id; }
+function spend_categoryDrop(targetId){
+  if(!_spendDragCatId || _spendDragCatId===targetId) return;
+  const ids = [...spendCategories].sort((a,b)=>a.order-b.order).map(c=>c.id);
+  const fromIdx = ids.indexOf(_spendDragCatId);
+  const toIdx = ids.indexOf(targetId);
+  ids.splice(toIdx, 0, ids.splice(fromIdx, 1)[0]);
+  ids.forEach((cid,i)=>{ spendCategories.find(c=>c.id===cid).order = i; });
+  _spendDragCatId = null;
+  saveLocalData();
+  render();
+}
+
+/* ---- Spend's own settings ---- */
+function spend_toggleSimpleMode(){
+  if(!state.settings.spend.simpleMode){
+    if(spendAccounts.length!==1){
+      alert('Simple Mode needs exactly one account. You currently have '+spendAccounts.length+'. Get down to exactly one account, then try again.');
+      return;
+    }
+    state.settings.spend.simpleMode = true;
+  } else {
+    state.settings.spend.simpleMode = false;
+    state.spendNav.screen = 'accounts';
+  }
+  saveLocalData();
+  render();
+}
+function spend_resetAllData(){
+  if(!confirm('This clears every spending account, transaction, and category — nothing else in FinApp is touched. Continue?')) return;
+  spendAccounts.length = 0;
+  spendCategories.length = 0;
+  spendCategories.push(...spendSeedCategories());
+  state.settings.spend = { simpleMode:true };
+  state.spendNav = { screen:'accounts', currentAccountId:null };
+  saveLocalData();
+  render();
+}
+
 function effectiveSpendingAtDate(date, investmentInterest){
   const hit = householdSpendingOverrides.find(o=> date>=parseD(o.start) && date<=parseD(o.end));
   if(hit) return hit.amount; // a scheduled change replaces the whole draw for that window — no % layered on top
@@ -1053,13 +1308,15 @@ function portfolioYearsLeft(weighted){
 
 /* ============ FORMATTERS ============ */
 const state = { tab:'fvm', pushed:null, sheet:null, sheetEdit:false, propEdit:false, sort:'balance', sortDir:1,
-  settings:{ showCents:false, weightedYears:true, monthlySpending:9000, spendingPctOfInterest:10, privacyMode:false, numberStyle:'off',
+  settings:{ showCents:false, weightedYears:true, monthlySpending:9000, spendingPctOfInterest:10, privacyMode:false, numberStyle:'compact',
     tax:{ enabled:false, mode:'auto', manualQuarterlyAmount:0,
       fedBrackets:[ {threshold:0, rate:10}, {threshold:23200, rate:12}, {threshold:94300, rate:22}, {threshold:201050, rate:24} ],
-      stateKey:'MT', stateRate:5, otherIncome:0, otherQualifiedIncome:0, useNIIT:true, bracketInflationPct:2.5, dueMonths:[4,6,9,1] } },
+      stateKey:'MT', stateRate:5, otherIncome:0, otherQualifiedIncome:0, useNIIT:true, bracketInflationPct:2.5, dueMonths:[4,6,9,1] },
+    spend:{ simpleMode:true } },
   settingsOpen:{ general:true, pm:false, defaults:false, rates:false, events:false, estTax:false },
   portfolioAnalyzerOpen:false,
   spendCompare:{ a:null, b:null },
+  spendNav:{ screen:'accounts', currentAccountId:null },
   planner:{}, analyzerSel:{}, azSections:{},
   cas:{ selectedId:'montana2', customBalance:350000, customRate:5.99, customTermYears:27,
     prepay:50000, grossReturn:4.5, taxRate:24, horizonKey:'5', horizonYearsCustom:5,
@@ -1076,7 +1333,7 @@ const state = { tab:'fvm', pushed:null, sheet:null, sheetEdit:false, propEdit:fa
 const FINAPP_STORAGE_KEY = 'finapp-data-v1';
 function saveLocalData(){
   try{
-    const payload = { version:1, properties, investments, analyzerSamples, standaloneLoans, householdSpendingOverrides, settings: state.settings, lastSyncAt: state.lastSyncAt||null };
+    const payload = { version:1, properties, investments, analyzerSamples, standaloneLoans, householdSpendingOverrides, spendAccounts, spendCategories, settings: state.settings, lastSyncAt: state.lastSyncAt||null };
     localStorage.setItem(FINAPP_STORAGE_KEY, JSON.stringify(payload));
   }catch(e){}
 }
@@ -1090,9 +1347,18 @@ function loadLocalData(){
     if(Array.isArray(data.analyzerSamples)) analyzerSamples.splice(0, analyzerSamples.length, ...data.analyzerSamples);
     if(Array.isArray(data.standaloneLoans)) standaloneLoans.splice(0, standaloneLoans.length, ...data.standaloneLoans);
     if(Array.isArray(data.householdSpendingOverrides)) householdSpendingOverrides.splice(0, householdSpendingOverrides.length, ...data.householdSpendingOverrides);
+    if(Array.isArray(data.spendAccounts)) spendAccounts.splice(0, spendAccounts.length, ...data.spendAccounts);
+    if(Array.isArray(data.spendCategories) && data.spendCategories.length) spendCategories.splice(0, spendCategories.length, ...data.spendCategories);
     if(data.settings) Object.assign(state.settings, data.settings);
     if(data.lastSyncAt) state.lastSyncAt = data.lastSyncAt;
   }catch(e){}
+  // Backfill fields for categories saved before enabled/order existed, and guarantee a
+  // "Spending Money" category always exists without wiping renamed/reordered/disabled ones.
+  spendCategories.forEach((c,i)=>{ if(c.enabled===undefined) c.enabled=true; if(typeof c.order!=='number') c.order=i; });
+  if(!spendCategories.some(c=>c.name.trim().toLowerCase()==='spending money')){
+    spendCategories.push({ id:spendUid(), name:'Spending Money', enabled:true, order:spendCategories.length });
+  }
+  spendCategories.sort((a,b)=>a.order-b.order);
 }
 function fmtDateTime(iso){
   if(!iso) return null;
@@ -1100,7 +1366,7 @@ function fmtDateTime(iso){
   return d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})+' at '+d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
 }
 function exportData(){
-  const payload = { version:1, properties, investments, analyzerSamples, standaloneLoans, householdSpendingOverrides, settings: state.settings, exportedAt: new Date().toISOString() };
+  const payload = { version:1, properties, investments, analyzerSamples, standaloneLoans, householdSpendingOverrides, spendAccounts, spendCategories, settings: state.settings, exportedAt: new Date().toISOString() };
   state.lastSyncAt = payload.exportedAt;
   const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
@@ -1223,6 +1489,7 @@ function render(){
     if(state.pushed.type==='settings') html = renderSettings();
     if(state.pushed.type==='prepay') html = renderPrepayAnalysis();
     if(state.pushed.type==='investment') html = renderInvestmentDetail(state.pushed.id);
+    if(state.pushed.type==='spend') html = renderSpend();
     tabbar.style.display='none';
   } else {
     tabbar.style.display='flex';
@@ -1934,6 +2201,87 @@ function renderSheet(){
   const s = state.sheet;
   if(s.type==='planner'){
     return renderPlannerSheet(s.id);
+  }
+  if(s.type==='spendAccount'){
+    const editing = !!s.editId;
+    const canSave = (rv('in-spend-acct-name', s.name)||'').trim().length>0;
+    return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
+      <div class="sheet-handle"></div>
+      ${sheetHead(editing?'Edit Account':'New Account', '', false)}
+      <div class="input-row"><input id="in-spend-acct-name" type="text" placeholder="Account name" value="${rv('in-spend-acct-name', s.name)}" oninput="RAW['in-spend-acct-name']=this.value; render()" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:16px;font-weight:600;outline:none;width:100%;"/></div>
+      ${!editing ? `
+      <div class="dim" style="font-size:12px; margin:12px 0 2px;">Starting balance</div>
+      <div class="input-row"><span class="suffix">$</span><input id="in-spend-acct-amt" type="text" inputmode="decimal" value="${rv('in-spend-acct-amt', s.amount)}" oninput="RAW['in-spend-acct-amt']=this.value; render()"/></div>
+      <div class="seg" style="margin-top:10px;">
+        <button class="${s.kind!=='withdrawal'?'active':''}" onclick="spend_setAccountKind('deposit')">Deposit</button>
+        <button class="${s.kind==='withdrawal'?'active':''}" onclick="spend_setAccountKind('withdrawal')">Withdrawal</button>
+      </div>` : ''}
+      <div class="btn-row" style="margin-top:14px;">
+        <div class="btn btn-primary" style="${canSave?'':'opacity:.5; pointer-events:none;'}" onclick="spend_saveAccountForm()">${editing?'Save':'Add'}</div>
+      </div>
+      ${editing?`<div style="text-align:center; margin-top:12px;"><span class="link" style="color:var(--danger); font-size:13px;" onclick="if(confirm('Delete this account? This removes its whole transaction history.')) spend_deleteAccount('${s.editId}')">Delete account</span></div>`:''}
+    </div></div>`;
+  }
+  if(s.type==='spendTx'){
+    const enabledCats = spendCategories.filter(c=>c.enabled || c.id===s.category);
+    const canSave = numFrom(rv('in-spend-tx-amt', s.amount))>0;
+    return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
+      <div class="sheet-handle"></div>
+      ${sheetHead(s.editId?'Edit Transaction':(s.kind==='deposit'?'Add Deposit':'Add Withdrawal'), '', false)}
+      <div class="dim" style="font-size:12px; margin-bottom:2px;">Description</div>
+      <div class="input-row"><input id="in-spend-tx-desc" type="text" placeholder="${s.kind==='deposit'?'Deposit':'Withdrawal'}" value="${rv('in-spend-tx-desc', s.description)}" oninput="RAW['in-spend-tx-desc']=this.value; render()" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:16px;font-weight:600;outline:none;width:100%;"/></div>
+      <div class="dim" style="font-size:12px; margin:12px 0 2px;">Amount</div>
+      <div class="input-row"><span class="suffix">$</span><input id="in-spend-tx-amt" type="text" inputmode="decimal" value="${rv('in-spend-tx-amt', s.amount)}" oninput="RAW['in-spend-tx-amt']=this.value; render()"/></div>
+      <div class="dim" style="font-size:12px; margin:12px 0 2px;">Category</div>
+      <div class="row-line" style="cursor:pointer; background:var(--surface-3); border-radius:10px; padding:11px 13px;" onclick="spend_toggleCatPicker()"><span class="l" style="font-weight:600;">${s.category ? (spendCategoryName(s.category) || '(hidden category)') : 'Select category'}</span><span class="v" style="color:var(--text-dim); font-weight:400;">&rsaquo;</span></div>
+      ${s.categoryPickerOpen ? `
+      <div class="card" style="margin-top:8px; padding:6px 0;">
+        <div class="row-line" style="cursor:pointer; ${!s.category?'color:var(--accent); font-weight:700;':''}" onclick="spend_pickCategory('')"><span class="l">No Category</span></div>
+        ${enabledCats.map(c=>`<div class="row-line" style="cursor:pointer; ${s.category===c.id?'color:var(--accent); font-weight:700;':''}" onclick="spend_pickCategory('${c.id}')"><span class="l">${c.name}${!c.enabled?' <span class="faint">(hidden)</span>':''}</span></div>`).join('')}
+        <div style="text-align:right; padding:8px 4px 0;"><span class="link" style="font-size:12px;" onclick="state.sheet=null; state.spendNav.screen='categories'; push({type:'spend'})">Manage categories &rsaquo;</span></div>
+      </div>` : ''}
+      <div class="btn-row" style="margin-top:14px;">
+        <div class="btn btn-primary" style="${canSave?'':'opacity:.5; pointer-events:none;'}" onclick="spend_saveTxForm()">${s.editId?'Save':'Add'}</div>
+      </div>
+      ${s.editId?`<div style="text-align:center; margin-top:12px;"><span class="link" style="color:var(--danger); font-size:13px;" onclick="if(confirm('Delete this transaction?')) spend_deleteTx('${s.acctId}','${s.editId}')">Delete transaction</span></div>`:''}
+    </div></div>`;
+  }
+  if(s.type==='spendCategory'){
+    const canSave = (rv('in-spend-cat-name', s.name)||'').trim().length>0;
+    return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
+      <div class="sheet-handle"></div>
+      ${sheetHead(s.editId?'Edit Category':'New Category', '', false)}
+      <div class="input-row"><input id="in-spend-cat-name" type="text" placeholder="Category name" value="${rv('in-spend-cat-name', s.name)}" oninput="RAW['in-spend-cat-name']=this.value; render()" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:16px;font-weight:600;outline:none;width:100%;"/></div>
+      <div class="btn-row" style="margin-top:14px;">
+        <div class="btn btn-primary" style="${canSave?'':'opacity:.5; pointer-events:none;'}" onclick="spend_saveCategoryForm()">${s.editId?'Save':'Add'}</div>
+      </div>
+    </div></div>`;
+  }
+  if(s.type==='spendRecurring'){
+    const canSave = (rv('in-spend-recur-desc', s.description)||'').trim().length>0 && numFrom(rv('in-spend-recur-amt', s.amount))>0;
+    return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
+      <div class="sheet-handle"></div>
+      ${sheetHead(s.editId?'Edit Recurring':'Recurring Transaction', '', false)}
+      <div class="dim" style="font-size:12px; margin-bottom:2px;">Description</div>
+      <div class="input-row"><input id="in-spend-recur-desc" type="text" value="${rv('in-spend-recur-desc', s.description)}" oninput="RAW['in-spend-recur-desc']=this.value; render()" style="background:none;border:none;color:var(--text);font-family:var(--font-ui);font-size:16px;font-weight:600;outline:none;width:100%;"/></div>
+      <div class="dim" style="font-size:12px; margin:12px 0 2px;">Amount</div>
+      <div class="input-row"><span class="suffix">$</span><input id="in-spend-recur-amt" type="text" inputmode="decimal" value="${rv('in-spend-recur-amt', s.amount)}" oninput="RAW['in-spend-recur-amt']=this.value; render()"/></div>
+      <div class="dim" style="font-size:12px; margin:12px 0 2px;">Frequency</div>
+      <select onchange="spend_setRecurFrequency(this.value)" style="width:100%; background:var(--surface-3); border:1px solid var(--border); border-radius:10px; padding:9px 11px; color:var(--text); font-family:var(--font-ui); font-size:16px; margin-bottom:8px;">
+        ${Object.entries(SPEND_FREQ_LABELS).map(([k,label])=>`<option value="${k}" ${s.frequency===k?'selected':''}>${label}</option>`).join('')}
+      </select>
+      <div class="dim" style="font-size:12px; margin:12px 0 2px;">Starts</div>
+      <input id="in-spend-recur-date" type="date" value="${(rv('in-spend-recur-date', s.firstDate)||spendTodayISO()).slice(0,10)}" oninput="RAW['in-spend-recur-date']=this.value" style="background:var(--surface-3); border:1px solid var(--border); border-radius:10px; padding:9px 11px; color:var(--text); font-family:var(--font-mono); font-size:16px; font-weight:700; width:100%;"/>
+      <div class="dim" style="font-size:12px; margin:12px 0 2px;">Type</div>
+      <div class="seg">
+        <button class="${s.kind!=='withdrawal'?'active':''}" onclick="spend_setRecurKind('deposit')">Deposit</button>
+        <button class="${s.kind==='withdrawal'?'active':''}" onclick="spend_setRecurKind('withdrawal')">Withdraw</button>
+      </div>
+      <div class="btn-row" style="margin-top:14px;">
+        <div class="btn btn-primary" style="${canSave?'':'opacity:.5; pointer-events:none;'}" onclick="spend_saveRecurringForm()">Save</div>
+      </div>
+      ${s.editId?`<div style="text-align:center; margin-top:12px;"><span class="link" style="color:var(--danger); font-size:13px;" onclick="if(confirm('Delete this recurring transaction?')) spend_deleteRecurring('${s.acctId}','${s.editId}')">Delete recurring transaction</span></div>`:''}
+    </div></div>`;
   }
   if(s.type==='incomeAdjust'){
     const baseline = state.settings.monthlySpending||0;
@@ -4016,6 +4364,7 @@ function renderSettings(){
         <button class="${s.numberStyle==='rounded'?'active':''}" onclick="settings_setNumberStyle('rounded')">Rounded</button>
         <button class="${s.numberStyle==='compact'?'active':''}" onclick="settings_setNumberStyle('compact')">Compact (K/M)</button>
       </div>
+      <div class="row-line"><span class="l">Spending log</span><button class="selectchip" onclick="spend_open()">Open</button></div>
       <div class="row-line"><span class="l">Personal spending</span><button class="selectchip" onclick="openSheet({type:'incomeAdjust'})">Open</button></div>
       <div class="row-line" style="margin-top:4px;"><span class="l">Last synced</span><span class="v" style="font-family:var(--font-ui); font-weight:600; font-size:13px;">${state.lastSyncAt?fmtDateTime(state.lastSyncAt):'Never'}</span></div>
       <div class="row-line"><span class="l">Export data (.json)</span><button class="selectchip" onclick="exportData()">Export</button></div>
@@ -4528,6 +4877,120 @@ function fvmSelectedDetailCard(){
     <div style="text-align:right; margin-top:8px;"><span class="link" style="font-size:12.5px;" onclick="state.returnToSheet={type:'fvmColDetail'}; closeSheet(); push({type:'investment', id:'${inv.id}'})">Edit this account &rsaquo;</span></div>
   `;
 }
+
+/* ============ PERSONAL SPENDING LOG ("SPENT") ============
+   Reached from Settings > Personal spending > Spending log, one push({type:'spend'}) slot
+   with its own small internal screen stack (see spend_* navigation functions above). */
+function renderSpend(){
+  spendMaterializeRecurring();
+  const screen = state.spendNav.screen;
+  if(screen==='detail') return renderSpendDetail();
+  if(screen==='categories') return renderSpendCategories();
+  if(screen==='settings') return renderSpendSettings();
+  return renderSpendAccounts();
+}
+function renderSpendAccounts(){
+  const rows = spendAccounts.map(a=>{
+    const bal = spendBalanceOf(a);
+    return `<div class="prop-card" onclick="spend_openAccount('${a.id}')">
+      <div class="prop-top">
+        <div class="prop-name">${a.name}</div>
+        <div style="text-align:right;"><div class="prop-balance" style="color:${bal<0?'var(--interest)':'var(--text)'};">${fmt$(bal)}</div></div>
+      </div>
+    </div>`;
+  }).join('');
+  return `
+  <div class="header-sticky">
+    <button class="back" onclick="goBack()">&lsaquo; ${backLabel()}</button>
+    <div style="display:flex; gap:8px;">
+      <div class="iconbtn" onclick="spend_openSettings()">${tabIcon('gear')}</div>
+      <div class="iconbtn" onclick="spend_openAccountForm(null)">+</div>
+    </div>
+  </div>
+  <h1 style="margin-bottom:14px;">Spending</h1>
+  <div class="card" style="margin-bottom:14px;">
+    <div class="dim" style="font-size:12.5px;">Total across all accounts</div>
+    <div class="big-number" style="margin-top:4px; color:${spendTotalBalance()<0?'var(--interest)':'var(--text)'};">${fmt$(spendTotalBalance())}</div>
+  </div>
+  <div class="section-label">Accounts</div>
+  ${spendAccounts.length ? rows : `<div class="dim" style="font-size:13px;">No accounts yet &mdash; tap + above to add one.</div>`}
+  <div style="height:6px;"></div>
+  `;
+}
+function renderSpendDetail(){
+  const acct = spendGetAccount(state.spendNav.currentAccountId);
+  if(!acct) return renderSpendAccounts();
+  const bal = spendBalanceOf(acct);
+  const isHome = spend_isHome(acct);
+  const txs = [...acct.transactions].sort((a,b)=> b.date.localeCompare(a.date) || 0);
+  const recurRows = (acct.recurring||[]).map(r=>`
+    <div class="cost-row" style="margin-bottom:8px;">
+      <div class="top"><span class="l">${r.description}</span><span class="v" style="color:${r.type==='withdrawal'?'var(--interest)':'var(--principal)'};">${r.type==='withdrawal'?'-':'+'}${fmt$(r.amount)}</span></div>
+      <div class="asof">${SPEND_FREQ_LABELS[r.frequency]||r.frequency} &middot; next ${spendFmtNextOccurrence(r)} &middot; <span class="link" style="font-size:10.5px;" onclick="spend_openRecurringForm('${acct.id}','${r.id}')">Edit</span> &middot; <span class="link" style="font-size:10.5px; color:var(--danger);" onclick="if(confirm('Delete this recurring transaction?')) spend_deleteRecurring('${acct.id}','${r.id}')">Delete</span></div>
+    </div>`).join('');
+  const txRows = txs.map(t=>`
+    <div class="row-line" style="cursor:pointer;" onclick="spend_openTxForm('${acct.id}','${t.id}')">
+      <span class="l">${t.description}<div class="dim" style="font-size:11.5px; margin-top:2px; font-weight:400;">${spendFmtDate(t.date)}${spendCategoryName(t.category)?` &middot; ${spendCategoryName(t.category)}`:''}${t.recurringId?' &middot; recurring':''}</div></span>
+      <span class="v" style="color:${t.amount<0?'var(--interest)':'var(--principal)'};">${fmtSigned$(t.amount)}</span>
+    </div>`).join('');
+  return `
+  <div class="header-sticky">
+    <button class="back" onclick="${isHome?'goBack()':'spend_detailBack()'}">&lsaquo; ${isHome?backLabel():'Accounts'}</button>
+    <div style="display:flex; gap:8px;">
+      ${isHome?`<div class="iconbtn" onclick="spend_openSettings()">${tabIcon('gear')}</div>`:''}
+      <div class="iconbtn" onclick="spend_openRecurringForm('${acct.id}', null)">+</div>
+    </div>
+  </div>
+  <div class="card" style="padding:14px 16px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+      <div style="font-size:18px; font-weight:700;">${acct.name}</div>
+      <div style="display:flex; gap:8px;">
+        <div class="iconbtn" style="width:26px; height:26px; border:1.4px solid var(--principal); border-radius:50%; color:var(--principal); font-weight:800; font-size:16px;" onclick="spend_openTxForm('${acct.id}', null, 'deposit')">+</div>
+        <div class="iconbtn" style="width:26px; height:26px; border:1.4px solid var(--interest); border-radius:50%; color:var(--interest); font-weight:800; font-size:16px;" onclick="spend_openTxForm('${acct.id}', null, 'withdrawal')">&minus;</div>
+      </div>
+    </div>
+    <div class="big-number" style="margin-top:6px; color:${bal<0?'var(--interest)':'var(--text)'};">${fmt$(bal)}</div>
+  </div>
+  ${(acct.recurring||[]).length ? `<div class="section-label">Recurring</div>${recurRows}` : ''}
+  <div class="section-label">Transactions</div>
+  ${txs.length ? `<div class="card">${txRows}</div>` : `<div class="dim" style="font-size:13px;">No transactions yet.</div>`}
+  <div style="height:6px;"></div>
+  `;
+}
+function renderSpendSettings(){
+  return `
+  <div class="header-sticky"><button class="back" onclick="spend_settingsBack()">&lsaquo; Back</button></div>
+  <h1 style="margin-bottom:14px;">Spending Settings</h1>
+  <div class="settings-row">
+    <div><div class="l" style="font-size:13.5px;">Simple Mode</div><div class="sub">Skip the account list &mdash; jump straight into your one account</div></div>
+    <div class="toggle ${state.settings.spend.simpleMode?'on':''}" onclick="spend_toggleSimpleMode()"><div class="knob"></div></div>
+  </div>
+  <div class="section-label" style="margin-top:18px;">Manage</div>
+  <div class="row-line" style="cursor:pointer;" onclick="state.spendNav.screen='categories'; render()"><span class="l">Categories</span><span class="v" style="color:var(--text-dim); font-weight:400;">${spendCategories.length} &rsaquo;</span></div>
+  <div class="dim" style="font-size:10.5px; margin-top:12px;">Spending accounts, transactions, and categories are included in FinApp's own Export/Import and Reset in the main Settings &mdash; nothing separate to back up here.</div>
+  <button class="reset-btn" style="width:100%; margin-top:22px; background:var(--surface-3); border:1px solid var(--border); color:var(--danger); font-weight:600; font-size:15px; padding:13px; border-radius:13px; cursor:pointer;" onclick="spend_resetAllData()">Reset Spending Data</button>
+  `;
+}
+function renderSpendCategories(){
+  const sorted = [...spendCategories].sort((a,b)=>a.order-b.order);
+  const rows = sorted.map(c=>`
+    <div class="cat-row" draggable="true" ondragstart="spend_categoryDragStart('${c.id}')" ondragover="event.preventDefault()" ondrop="spend_categoryDrop('${c.id}')" style="display:flex; align-items:center; gap:10px; padding:12px 4px; border-bottom:1px solid var(--border-soft); cursor:grab;">
+      <span class="dim" style="flex:0 0 auto;">&#8942;&#8942;</span>
+      <span style="flex:1; font-size:15px; font-weight:600; cursor:pointer;" onclick="spend_openCategoryForm('${c.id}')">${c.name}</span>
+      <div class="toggle ${c.enabled?'on':''}" onclick="event.stopPropagation(); spend_toggleCategoryEnabled('${c.id}')"><div class="knob"></div></div>
+    </div>`).join('');
+  return `
+  <div class="header-sticky">
+    <button class="back" onclick="spend_categoriesBack()">&lsaquo; Settings</button>
+    <div class="iconbtn" onclick="spend_openCategoryForm(null)">+</div>
+  </div>
+  <h1 style="margin-bottom:6px;">Categories</h1>
+  <div class="dim" style="font-size:12px; margin-bottom:10px;">Drag to reorder. Turn one off to hide it from the picker without losing history on transactions that already used it.</div>
+  ${rows}
+  <div style="text-align:center; margin-top:14px;"><button class="btn-ghost-sm" onclick="spend_openCategoryForm(null)">+ Add Category</button></div>
+  `;
+}
+
 function renderFVM(){
   const f = state.fvm;
   const firstReal = investments.find(i=>i.committed!==false);
