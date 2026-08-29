@@ -400,6 +400,9 @@ function propLoan_set(loanId, field, val){
   const l = findLoan(loanId);
   if(!l) return;
   if(field==='start'){ if(val) l.start = val+'-01'; }
+  // A 0-month term isn't a valid loan — it breaks the schedule builder (crashes every
+  // caller expecting a current row to exist), unlike rate/amount, which are meaningfully 0.
+  else if(field==='term'){ l[field] = Math.max(1, numFrom(val)); }
   else l[field] = Math.max(0, numFrom(val));
   delete SCHED[loanId]; delete SCHED_INDEX[loanId];
   render();
@@ -1257,8 +1260,17 @@ function findProperty(id){
   if(sl) return { id:sl.id, name:sl.label||'New loan', type:'Loan', note:null, loans:[sl], isStandaloneLoan:true, committed:sl.committed!==false };
   return null;
 }
-function idxCurrent(rows){ return rows.findIndex(r=>mkey(r.date)===mkey(TODAY)); }
-function currentRow(id){ const {rows}=scheduleFor(id); return rows[idxCurrent(rows)]; }
+/* The schedule stops generating rows once a loan pays off (balance hits $0) or once its
+   term ends — either of which can land before TODAY (a fully paid-off loan, or a short
+   term relative to how long ago it started). With no exact row for today, every caller
+   here assumed one existed anyway and crashed on the undefined row. Fall back to the last
+   row (paid off — nothing owed, nothing remaining) or the first (not started yet). */
+function idxCurrent(rows){
+  const exact = rows.findIndex(r=>mkey(r.date)===mkey(TODAY));
+  if(exact>=0 || !rows.length) return exact;
+  return rows[0].date>TODAY ? 0 : rows.length-1;
+}
+function currentRow(id){ const {rows}=scheduleFor(id); return rows[idxCurrent(rows)] || null; }
 function yearsLeft(id){ const {rows}=scheduleFor(id); return (rows.length-idxCurrent(rows))/12; }
 function originalLifetimeInterest(loan){ const pmt=pmtFor(loan); return pmt*loan.term-loan.original; }
 function paidToDate(id){ const {rows}=scheduleFor(id); const idx=idxCurrent(rows); let s=0; for(let i=0;i<=idx;i++) s+=rows[i].interest; return s; }
@@ -2935,6 +2947,8 @@ function loan_set(id, field, val){
   if(!l) return;
   if(field==='label') l.label = val;
   else if(field==='start'){ if(val) l.start = val+'-01'; }
+  // Same reasoning as propLoan_set: a 0-month term breaks the schedule builder.
+  else if(field==='term'){ l[field] = Math.max(1, numFrom(val)); }
   else l[field] = Math.max(0, numFrom(val));
   delete SCHED[id]; delete SCHED_INDEX[id];
   render();
