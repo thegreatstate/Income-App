@@ -1259,6 +1259,12 @@ function findLoan(id){ for(const p of properties) for(const l of allLoansOf(p)) 
 function findProperty(id){
   const direct = properties.find(p=>p.id===id);
   if(direct) return direct;
+  // A primary loan's own id doesn't always match its parent property's id (e.g. seed data
+  // has properties whose loan carries a distinct id) — resolve by primary loan id too, not
+  // just remodel/standalone loans below. Returns the real property (not a wrapper), same as
+  // looking it up by its own id would.
+  const byPrimaryLoan = properties.find(p=>p.loans.some(l=>l.id===id));
+  if(byPrimaryLoan) return byPrimaryLoan;
   for(const p of properties){
     const loan = (p.otherLoans||[]).find(l=>l.id===id);
     if(loan) return { id:loan.id, name:loan.label.split(' note')[0], type:'Remodel loan &middot; '+displayName(p), note:null, loans:[loan], isStandaloneLoan:true };
@@ -1384,10 +1390,13 @@ function propertyCashFlowAtDate(prop, date){
 function standaloneLoanPayment(id){ const r=currentRow(id); return r? r.interest+r.principal : 0; }
 function standaloneLoanPaymentAtDate(id, date){ const r=scheduleRowAtDate(id, date); return r? r.interest+r.principal : 0; }
 function incomeSources(){
+  // name/sub are always pre-escaped here (matching displayName()'s own convention) so every
+  // consumer can drop them straight into HTML — found one place downstream (Income's own
+  // source list) that rendered .sub raw because this list mixed pre-escaped and raw fields.
   const list = [];
-  properties.forEach(p=> list.push({ id:'prop:'+p.id, kind:'property', name:displayName(p), sub:p.type, amount: propertyCashFlow(p) }));
+  properties.forEach(p=> list.push({ id:'prop:'+p.id, kind:'property', name:displayName(p), sub:escHtml(p.type), amount: propertyCashFlow(p) }));
   investments.forEach(inv=> { if(inv.committed===false) return; list.push({ id:'inv:'+inv.id, kind:'investment', name:displayName(inv), sub:inv.isSample?'Investment &middot; sample':'Investment', amount: invMonthlyReturn(inv) }); });
-  standaloneLoans.forEach(l=> { if(l.committed===false) return; list.push({ id:'loan:'+l.id, kind:'loan', name:l.label, sub:'Loan payment', amount: -standaloneLoanPayment(l.id) }); });
+  standaloneLoans.forEach(l=> { if(l.committed===false) return; list.push({ id:'loan:'+l.id, kind:'loan', name:escHtml(l.label), sub:'Loan payment', amount: -standaloneLoanPayment(l.id) }); });
   return list;
 }
 function incomeSourceAtDate(src, date){
@@ -1476,7 +1485,12 @@ const state = { tab:'fvm', pushed:null, sheet:null, sheetEdit:false, propEdit:fa
   income:{ sortDir:-1, sortKey:'amount', expanded:false, invEdit:false, invDraft:null },
   timelineDate:null, // shared "which month am I looking at" between FVM and Income's timelines
   yr1Idx:-1, yr5Idx:-1, multCursor:-1, // shared jump-button cursors, same reason
-  fvm:{ lump:500000, lumpDirection:'add', lumpDate:null, selectedCol:null,
+  fvm:{ lump:500000, lumpDirection:'add', lumpDate:null, selectedCol:null, selectedLoanId:null, compareSort:10,
+    // selectedCol is dual-purpose (also drives which column is highlighted on the main FVM
+    // table, which has its own "default to the first investment" fill-in on every render) —
+    // pickKind is the explicit source of truth for which destination the What-If sheet has
+    // picked, so that logic can't silently clobber a loan pick back to an investment.
+    pickKind:null,
     whatIfOpen:false, saleOpen:false, salePropId:null, salePrice:0, saleCostPct:7, saleTaxPct:20 },
   lastSyncAt:null
 };
@@ -1679,7 +1693,6 @@ function render(){
   let html = '';
   if(state.pushed){
     if(state.pushed.type==='loan') html = renderLoanDetail(state.pushed.id);
-    if(state.pushed.type==='allocate') html = renderAllocateDetail();
     if(state.pushed.type==='settings') html = renderSettings();
     if(state.pushed.type==='prepay') html = renderPrepayAnalysis();
     if(state.pushed.type==='investment') html = renderInvestmentDetail(state.pushed.id);
@@ -1783,8 +1796,7 @@ function renderPortfolio(){
     <div class="dim" style="font-size:11.5px; margin-top:11px;">${properties.length} propert${properties.length===1?'y':'ies'} &middot; ${properties.reduce((s,p)=>s+allLoansOf(p).length,0)} loan${properties.reduce((s,p)=>s+allLoansOf(p).length,0)===1?'':'s'} &middot; ${fmtYears(yrs)} ${state.settings.weightedYears?'balance-weighted':'unweighted'} avg left</div>
   </div>
   <div style="text-align:right; margin:10px 0 0;">
-    <div><span class="link" style="font-size:13px;" onclick="opportunity_show()">Best use of the next dollar &rsaquo;</span></div>
-    <div style="margin-top:4px;"><span class="link" style="font-size:13px;" onclick="push({type:'allocate'})">Where should the cash go? &rsaquo;</span></div>
+    <span class="link" style="font-size:13px;" onclick="opportunity_show()">Best use of the next dollar &rsaquo;</span>
   </div>
   <div class="section-label" style="margin-top:18px; display:flex; justify-content:space-between; align-items:center;"><span>Properties</span><span class="link" style="font-size:12px; font-weight:600; text-transform:none; letter-spacing:normal;" onclick="prop_openAdd()">+ Add property</span></div>
   <div class="sort-row" style="margin-top:0;">
@@ -1955,49 +1967,6 @@ function allocationLoans(){
     (p.otherLoans||[]).forEach(l=>{ list.push({ loan:l, displayName:displayName(findProperty(l.id)), sub:'Remodel loan &middot; '+displayName(p) }); });
   });
   return list;
-}
-function setAllocateCash(v){ state.allocateCash = Math.max(0, numFrom(v)); render(); }
-function renderAllocateDetail(){
-  const cash = state.allocateCash || 50000;
-  const nextMonthStr = mkey(addM(TODAY,1))+'-01';
-  const rows = allocationLoans().map(({loan, displayName, sub})=>{
-    const cur = currentRow(loan.id);
-    const currentIP = cur.principal>0 ? cur.interest/cur.principal : 0;
-    const baseline = projectForward(loan.id, []);
-    const scenario = cash>0 ? projectForward(loan.id, [{date:nextMonthStr, amount:cash}]) : baseline;
-    const idx = idxCurrent(scheduleFor(loan.id).rows);
-    const monthsSaved = baseline.length - scenario.length;
-    let a=0,b=0;
-    for(let i=idx+1;i<baseline.length;i++) a+=baseline[i].interest;
-    for(let i=idx+1;i<scenario.length;i++) b+=scenario[i].interest;
-    const interestSaved = a-b;
-    const nextRow = scenario[idx+1];
-    const newIP = nextRow && nextRow.principal>0 ? nextRow.interest/nextRow.principal : currentIP;
-    return {displayName, sub, balance:cur.balance, currentIP, newIP, monthsSaved, interestSaved};
-  }).sort((a,b)=>b.monthsSaved-a.monthsSaved);
-
-  return `
-  <div class="header-sticky"><button class="back" onclick="goBack()">&lsaquo; ${backLabel()}</button></div>
-  <h1 style="font-size:20px; margin:0 0 4px;">Where Should the Cash Go?</h1>
-  <div class="dim" style="font-size:13px; margin-bottom:14px;">Ranked by how much time each option saves.</div>
-  <div class="card" style="margin-bottom:16px; padding:14px 16px;">
-    <div class="dim" style="font-size:12px; margin-bottom:2px;">Cash available to deploy</div>
-    <div class="input-row"><span class="suffix">$</span><input id="in-allocate-cash" type="text" inputmode="decimal" value="${rv('in-allocate-cash',cash)}" oninput="RAW['in-allocate-cash']=this.value; setAllocateCash(this.value)"/></div>
-  </div>
-  ${rows.map(r=>`
-  <div class="card" style="margin-bottom:12px; padding:14px 16px;">
-    <div class="prop-top" style="margin-bottom:10px;">
-      <div><div class="prop-name" style="font-size:15px;">${r.displayName}</div><div class="prop-sub">${r.sub}</div></div>
-      <div style="text-align:right;"><div class="prop-balance" style="font-size:15px;">${fmt$(r.balance)}</div></div>
-    </div>
-    <div class="prop-metrics">
-      <div class="metric ip"><div class="v" style="font-size:13px;">${fmtRatio(r.currentIP)} &rarr; ${fmtRatio(r.newIP)}</div><div class="l">I/P now &rarr; after</div></div>
-      <div class="metric"><div class="v" style="color:var(--confirmed)">${r.monthsSaved} mo</div><div class="l">Time saved</div></div>
-      <div class="metric principal"><div class="v">${fmt$(r.interestSaved)}</div><div class="l">Interest saved</div></div>
-    </div>
-  </div>`).join('')}
-  <details class="footnote" style="margin-bottom:6px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Each row models applying the full amount as a one-time payment next month to that loan alone, on top of anything already planned or locked in &mdash; nothing here is saved automatically. Open a loan's own planner to actually commit it.</div></details>
-  `;
 }
 
 function renderPropCard(prop){
@@ -2658,6 +2627,30 @@ function renderSheet(){
       <details class="footnote" style="margin-top:14px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Paying down a loan is a guaranteed return equal to its rate. Adding to an investment earns its current rate &mdash; not guaranteed, since markets move. Ranked together by that number alone, no tax/liquidity/risk adjustment beyond what's already real in each rate. Want the detailed month-by-month payoff math for a specific loan instead? <span class="link" onclick="closeSheet(); push({type:'prepay'})">Open Pay Down Debt or Invest &rsaquo;</span></div></details>
     </div></div>`;
   }
+  if(s.type==='fvmCashCompare'){
+    const lump = fvmCompareLump();
+    const sortY = state.fvm.compareSort || 10;
+    const candidates = fvmCashCandidates().sort((a,b)=>b.values[sortY]-a.values[sortY]);
+    const rowsHtml = candidates.map(c=>`<div class="list-card" onclick="fvm_pickCashCandidate('${c.kind}','${c.id}')">
+      <div class="prop-top">
+        <div><div class="prop-name" style="font-size:14px;">${c.name}</div><div class="prop-sub">${c.sub}</div></div>
+      </div>
+      <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin-top:8px;">
+        ${FVM_CASH_CHECKPOINTS.map(y=>`<div class="metric" style="${y===sortY?'opacity:1;':'opacity:.6;'}"><div class="v" style="font-size:13px; ${y===sortY?'color:var(--principal); font-weight:700;':''}">${fmt$(c.values[y])}</div><div class="l">${y}yr</div></div>`).join('')}
+      </div>
+    </div>`).join('');
+    return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet full">
+      ${sheetHead('Where Should This Go?', lump>0 ? `${fmt$(lump)}, ranked by long-term impact` : 'Type an amount first', false)}
+      ${lump<=0 ? `<div class="dim" style="font-size:13px;">Go back and enter an amount to compare.</div>` : `
+      <div class="dim" style="font-size:12px; margin-bottom:8px;">Extra net worth from this choice, by each year &mdash; loans count both debt paid off and, once a loan&rsquo;s paid off early, the monthly payment that frees up from then on.</div>
+      <div class="sort-row" style="margin-bottom:10px;">
+        ${FVM_CASH_CHECKPOINTS.map(y=>`<div class="chip ${sortY===y?'active':''}" onclick="fvm_setCompareSort(${y})">${y}yr</div>`).join('')}
+      </div>
+      ${candidates.length===0 ? `<div class="dim" style="font-size:13px;">No loans or investments to compare yet.</div>` : rowsHtml}
+      <details class="footnote" style="margin-top:14px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Investment numbers assume today's rate holds steady and isolate just this lump sum's own growth &mdash; on top of anything already planned, same as elsewhere in the app. Loan numbers use your real amortization schedule with this amount applied as an extra payment next month. Freed-up cash after an early payoff is assumed parked at ${fmtPct(fvmSafeParkRate())} (your most conservative committed account) &mdash; not reinvested at a higher, less certain rate.</div></details>
+      `}
+    </div></div>`;
+  }
   if(s.type==='netWorthBreakdown'){
     const nw = netWorthTotals();
     const rows = properties.map(p=>({ name: displayName(p), amount: propertyEquity(p) }));
@@ -2743,8 +2736,16 @@ function renderSheet(){
     const f = state.fvm;
     const lump = fvmEffectiveLump();
     const netProceeds = f.saleOpen ? fvmSaleNetProceeds() : 0;
-    const pickedInv = f.selectedCol && f.selectedCol!=='gt' ? findInvestment(f.selectedCol) : null;
-    const canCommit = f.whatIfOpen && lump!==0 && !!pickedInv;
+    // Gate on pickKind, not just whether selectedCol/selectedLoanId happen to be set — the
+    // main FVM table separately defaults selectedCol to the first investment on every render
+    // (for its own column-highlight purposes), which would otherwise silently override a
+    // loan pick back to an investment.
+    const pickedInv = f.pickKind==='investment' && f.selectedCol && f.selectedCol!=='gt' ? findInvestment(f.selectedCol) : null;
+    // A loan prepayment only makes sense for money coming in (typed "Add", or a sale — always
+    // an inflow) — "Spend" means money leaving the household, not a redirect toward debt.
+    const isInflow = f.saleOpen || f.lumpDirection!=='spend';
+    const pickedLoan = f.pickKind==='loan' && isInflow && f.selectedLoanId ? findLoan(f.selectedLoanId) : null;
+    const canCommit = f.whatIfOpen && lump!==0 && !!(pickedInv || pickedLoan);
     const commitDate = f.lumpDate ? parseD(f.lumpDate) : TODAY;
     const isPastOrToday = commitDate<=TODAY;
     return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
@@ -2785,21 +2786,22 @@ function renderSheet(){
       <div class="dim" style="font-size:11px; margin:12px 0 2px;">When</div>
       <input type="month" value="${mkey(f.lumpDate?parseD(f.lumpDate):TODAY)}" min="${mkey(TODAY)}" oninput="fvm_setLumpDate(this.value)" style="background:var(--surface-3); border:1px solid var(--border); border-radius:10px; padding:9px 11px; color:var(--text); font-family:var(--font-mono); font-size:16px; font-weight:700; width:100%;"/>
       <div class="dim" style="font-size:11px; margin:12px 0 2px;">Which account gets it</div>
-      <div class="sort-row" style="margin:2px 0 0;">
-        ${investments.filter(i=>i.committed!==false).map(inv=>`<div class="chip ${f.selectedCol===inv.id?'active':''}" onclick="fvm_pickWhatIfAccount('${inv.id}')">${displayName(inv)}</div>`).join('')}
+      <div class="row-line" style="cursor:pointer; background:var(--surface-3); border-radius:10px; padding:11px 13px;" onclick="openSheet({type:'fvmCashCompare'})">
+        <span class="l" style="font-weight:600;">${pickedInv ? displayName(pickedInv) : (pickedLoan ? fvmLoanDisplayName(pickedLoan.id) : 'Choose a destination')}</span>
+        <span class="v" style="color:var(--text-dim); font-weight:400;">Compare &rsaquo;</span>
       </div>
-      ${lump!==0 ? `<div class="dim" style="font-size:11px; margin-top:12px;">${pickedInv ? `Showing on ${displayName(pickedInv)}&rsquo;s column now &mdash; close this to see ${fmtSigned$(lump)} land there in ${f.lumpDate?fmtMonth(parseD(f.lumpDate)):fmtMonth(TODAY)}` : 'Pick an account above to preview it there'}${f.saleOpen&&f.salePropId?' &mdash; and that property&rsquo;s cash flow drops out of every column from that month on':''}.</div>` : ''}
-      ${canCommit ? (isPastOrToday ? `
+      ${lump!==0 ? `<div class="dim" style="font-size:11px; margin-top:12px;">${(pickedInv||pickedLoan) ? `${pickedInv?`Showing on ${displayName(pickedInv)}&rsquo;s column now`:`Applying as an extra payment on ${fvmLoanDisplayName(pickedLoan.id)}`} &mdash; close this to see ${fmtSigned$(lump)} land there in ${f.lumpDate?fmtMonth(parseD(f.lumpDate)):fmtMonth(TODAY)}` : 'Tap above to compare where this could go'}${f.saleOpen&&f.salePropId?' &mdash; and that property&rsquo;s cash flow drops out of every column from that month on':''}.</div>` : ''}
+      ${canCommit ? (isPastOrToday && pickedInv ? `
       <div class="btn-row" style="margin-top:14px;">
         <div class="btn btn-primary" onclick="fvm_commitWhatIf('confirmed')">Record</div>
       </div>
       <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">This month is now, so this updates ${displayName(pickedInv)}&rsquo;s real balance immediately.</div></details>
       ` : `
       <div class="btn-row" style="margin-top:14px;">
-        <div class="btn btn-planned" onclick="fvm_commitWhatIf('planned')">Plan (purple)</div>
-        <div class="btn btn-confirm" onclick="fvm_commitWhatIf('confirmed')">Lock in (teal)</div>
+        <div class="btn btn-planned" onclick="${pickedLoan?'fvm_commitWhatIfLoan':'fvm_commitWhatIf'}('planned')">Plan (purple)</div>
+        <div class="btn btn-confirm" onclick="${pickedLoan?'fvm_commitWhatIfLoan':'fvm_commitWhatIf'}('confirmed')">Lock in (teal)</div>
       </div>
-      <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">This turns the preview into a real, editable event on ${displayName(pickedInv)} &mdash; it'll show up on the Income timeline and you can edit or delete it from that cell.${f.saleOpen&&f.salePropId?` ${displayName(findProperty(f.salePropId))} also stops showing rent, tax, and mortgage cost anywhere from ${fmtMonth(commitDate)} on &mdash; undo that anytime from the property&rsquo;s own page.`:''}</div></details>
+      <details class="footnote"><summary class="info-btn">&#9432;</summary><div class="footnote-body">${pickedLoan ? `This adds a real extra payment to that loan&rsquo;s own schedule &mdash; it'll show up (and can be edited or deleted) on the loan&rsquo;s own page.` : `This turns the preview into a real, editable event on ${displayName(pickedInv)} &mdash; it'll show up on the Income timeline and you can edit or delete it from that cell.${f.saleOpen&&f.salePropId?` ${displayName(findProperty(f.salePropId))} also stops showing rent, tax, and mortgage cost anywhere from ${fmtMonth(commitDate)} on &mdash; undo that anytime from the property&rsquo;s own page.`:''}`}</div></details>
       `) : ''}
     </div></div>`;
   }
@@ -2902,6 +2904,118 @@ function projectForward(loanId, plannedExtras){
     k++; date=addM(date,1); steps++;
   }
   return rows;
+}
+
+/* ============ "WHAT IF I ADD MONEY" — COMPARE LOANS & INVESTMENTS ============
+   Where a given lump sum does the most for you, scored by long-term impact (5/10/15/20yr)
+   instead of a snapshot ratio. Investments: isolate the lump's own compounding at that
+   account's rate — same "on top of anything already planned" isolation the prepay analyzer
+   already uses. Loans: reuse projectForward (above) to diff a baseline schedule against one
+   with the lump applied as an extra payment, plus the future value of whatever monthly
+   payment gets freed up if the loan pays off before the checkpoint — money that would
+   otherwise still be leaving the household, not just a frozen balance difference. */
+const FVM_CASH_CHECKPOINTS = [5,10,15,20];
+function monthsBetweenDates(d1, d2){ return (d2.getFullYear()-d1.getFullYear())*12 + (d2.getMonth()-d1.getMonth()); }
+// Row at-or-just-before targetDate, or the schedule's last row if it ends before targetDate
+// (the loan paid off) — exactly what a checkpoint lookup needs either way.
+function rowAtOrBeforeDate(rows, targetDate){
+  let result = rows[0];
+  for(const r of rows){
+    if(r.date>targetDate) break;
+    result = r;
+  }
+  return result;
+}
+// Prefer an account actually named "money market"; otherwise the most conservative
+// (lowest-rate) committed investment — never a hardcoded account name dependency.
+function fvmSafeParkRate(){
+  const committed = investments.filter(i=>i.committed!==false);
+  if(!committed.length) return 0;
+  const mm = committed.find(i=>/money\s*market/i.test(i.name||''));
+  if(mm) return mm.rate||0;
+  return committed.reduce((min,i)=>Math.min(min, i.rate||0), committed[0].rate||0);
+}
+function fvmAnnuityFV(pmt, months, monthlyRate){
+  if(months<=0 || pmt<=0) return 0;
+  if(Math.abs(monthlyRate)<1e-9) return pmt*months; // same 0%-rate straight-sum fallback pmtFor uses
+  return pmt * ((Math.pow(1+monthlyRate, months)-1)/monthlyRate);
+}
+function fvmInvestmentCandidateValues(inv, lump){
+  const monthlyRate = (inv.rate||0)/100/12;
+  const out = {};
+  FVM_CASH_CHECKPOINTS.forEach(y=>{ out[y] = lump * Math.pow(1+monthlyRate, y*12); });
+  return out;
+}
+// Future value of a loan's own freed-up payment, compounding from its payoff date to a
+// checkpoint — 0 if it hasn't paid off by then.
+function fvmFreedCashPileAt(payoffDate, pmt, safeRate, checkDate){
+  if(!payoffDate || payoffDate>=checkDate) return 0;
+  return fvmAnnuityFV(pmt, monthsBetweenDates(payoffDate, checkDate), safeRate);
+}
+function fvmLoanCandidateValues(loanId, lump, startDate){
+  const baseline = projectForward(loanId, []);
+  const scenario = projectForward(loanId, [{date: startDate, amount: lump}]);
+  const safeRate = fvmSafeParkRate()/100/12;
+  const lastBase = baseline[baseline.length-1], lastScen = scenario[scenario.length-1];
+  const baselinePayoff = lastBase.balance<=0.01 ? lastBase.date : null;
+  const scenarioPayoff = lastScen.balance<=0.01 ? lastScen.date : null;
+  // The standard contractual payment, not the schedule's own last row — a schedule's final
+  // row is often a smaller "clean-up" payment (clamped to whatever balance remains), which
+  // understated the freed-up amount. Same loan, same payment either way, whether it pays off
+  // early (scenario) or on schedule (baseline).
+  const pmt = pmtFor(findLoan(loanId));
+  const out = {};
+  // Both loans eventually free up their own payment once *they* pay off (baseline too,
+  // just later) — comparing only the scenario's freed cash against nothing let the total
+  // silently drop once baseline caught up and started freeing cash of its own. Symmetric
+  // "each side's own freed-cash pile, difference taken" keeps this monotonically sensible:
+  // once both are paid off, the gap is a permanent head start that keeps compounding.
+  FVM_CASH_CHECKPOINTS.forEach(y=>{
+    const checkDate = addM(TODAY, y*12);
+    const baseRow = rowAtOrBeforeDate(baseline, checkDate);
+    const scenRow = rowAtOrBeforeDate(scenario, checkDate);
+    const balanceDiff = Math.max(0,baseRow.balance) - Math.max(0,scenRow.balance);
+    const scenarioPile = fvmFreedCashPileAt(scenarioPayoff, pmt, safeRate, checkDate);
+    const baselinePile = fvmFreedCashPileAt(baselinePayoff, pmt, safeRate, checkDate);
+    out[y] = balanceDiff + scenarioPile - baselinePile;
+  });
+  return out;
+}
+// The raw amount to allocate, independent of the "Active" preview toggle (irrelevant here)
+// and always positive (spending isn't a "where should this go" candidate comparison).
+function fvmCompareLump(){
+  const f = state.fvm;
+  return f.saleOpen ? fvmSaleNetProceeds() : Math.abs(f.lump||0);
+}
+// Single source of truth for how a loan identifies itself in the compare table and the
+// What-If sheet's summary line — a primary property loan goes by the property's own name,
+// a remodel/standalone loan goes by its own label. Already HTML-safe (matches displayName()'s
+// own convention: callers use the result directly, no extra escHtml() needed).
+function fvmLoanDisplayName(loanId){
+  const prop = properties.find(p=>p.loans.some(l=>l.id===loanId));
+  if(prop) return displayName(prop);
+  const loan = findLoan(loanId);
+  return loan ? escHtml((loan.label||'Loan').split(' note')[0]) : 'Loan';
+}
+function fvmCashCandidates(){
+  const lump = fvmCompareLump();
+  // projectForward's extras expect a date *string* (it calls parseD on it internally) —
+  // not a parsed Date object.
+  const startDate = state.fvm.lumpDate || (mkey(addM(TODAY,1))+'-01');
+  const list = [];
+  investments.filter(i=>i.committed!==false).forEach(inv=>{
+    list.push({ kind:'investment', id:inv.id, name:displayName(inv), sub:'Investment', values: fvmInvestmentCandidateValues(inv, lump) });
+  });
+  properties.forEach(p=>{
+    if(p.loans.length) list.push({ kind:'loan', id:p.loans[0].id, name:fvmLoanDisplayName(p.loans[0].id), sub:p.type, values: fvmLoanCandidateValues(p.loans[0].id, lump, startDate) });
+    (p.otherLoans||[]).forEach(l=>{
+      list.push({ kind:'loan', id:l.id, name:fvmLoanDisplayName(l.id), sub:'Remodel loan &middot; '+displayName(p), values: fvmLoanCandidateValues(l.id, lump, startDate) });
+    });
+  });
+  standaloneLoans.filter(l=>l.committed!==false).forEach(l=>{
+    list.push({ kind:'loan', id:l.id, name:fvmLoanDisplayName(l.id), sub:'Personal loan', values: fvmLoanCandidateValues(l.id, lump, startDate) });
+  });
+  return list;
 }
 
 function plannerMetrics(propId){
@@ -4016,7 +4130,7 @@ function incomeSourceCard(src){
   const prop = src.kind==='property' ? findProperty(src.id.slice(5)) : null;
   return `<div class="prop-card" onclick="${onclick}">
     <div class="prop-top">
-      <div><div class="prop-name" style="font-size:15px;">${escHtml(src.name)}</div><div class="prop-sub">${src.sub}</div></div>
+      <div><div class="prop-name" style="font-size:15px;">${src.name}</div><div class="prop-sub">${src.sub}</div></div>
       <div style="text-align:right;">
         <div class="prop-balance" style="font-size:16px; color:${color};">${fmtSigned$(src.amount)}/mo</div>
         ${inv ? `<div class="dim" style="font-size:11.5px; margin-top:1px;">${fmt$(inv.balance)} total</div>` : ''}
@@ -5001,7 +5115,6 @@ function fvm_selectCol(id){ state.fvm.selectedCol = id; state.multCursor = -1; o
 /* Same selection as tapping a column header on the table, but from inside the What-If sheet
    itself and without navigating away — picking a column used to require closing this sheet
    and finding the right header among many, which wasn't obvious as the next step at all. */
-function fvm_pickWhatIfAccount(id){ state.fvm.selectedCol = id; state.multCursor = -1; render(); }
 /* Turns the ephemeral what-if preview into a real, editable investment event —
    same shape invAction_submitCell writes, so it shows up and can be edited/deleted
    from the Income timeline's own cell editor afterward. */
@@ -5027,8 +5140,36 @@ function fvm_commitWhatIf(status){
     if(prop) prop.soldDate = date0;
   }
   state.fvm.whatIfOpen=false; state.fvm.saleOpen=false; state.fvm.salePropId=null;
-  state.fvm.salePrice=0; state.fvm.lump=0; state.fvm.selectedCol=null;
+  state.fvm.salePrice=0; state.fvm.lump=0; state.fvm.selectedCol=null; state.fvm.pickKind=null;
   RAW['in-fvm-lump']=''; RAW['in-fvm-saleprice']='';
+  closeSheet();
+}
+function fvm_setCompareSort(y){ state.fvm.compareSort = y; render(); }
+// Picking a row in the compare table just sets which destination is selected and returns to
+// the same What-If sheet — state.fvm.lump/lumpDate persist independently of which sheet is
+// open, so there's no need for the return-to-previous-sheet machinery used elsewhere.
+function fvm_pickCashCandidate(kind, id){
+  if(kind==='loan') state.fvm.selectedLoanId = id;
+  else state.fvm.selectedCol = id;
+  state.fvm.pickKind = kind;
+  state.multCursor = -1;
+  openSheet({type:'fvmWhatIf'});
+}
+/* Loan side of committing the What-If lump sum — reuses the existing Planner (pl_save)
+   rather than writing a parallel commit path. findProperty() already transparently wraps
+   remodel and standalone loan ids, so plannerFor()/pl_save() work correctly for any loan,
+   not just a property's primary one. */
+function fvm_commitWhatIfLoan(status){
+  const loanId = state.fvm.selectedLoanId;
+  const lump = fvmCompareLump();
+  if(!loanId || lump<=0) return;
+  const draft = plannerFor(loanId);
+  draft.editing = null; // don't inherit a stale edit-in-progress from that loan's own Planner sheet
+  draft.amount = lump;
+  draft.date = state.fvm.lumpDate || (mkey(addM(TODAY,1))+'-01');
+  pl_save(loanId, status==='confirmed' ? 'confirmed' : 'planned');
+  state.fvm.whatIfOpen=false; state.fvm.lump=0; state.fvm.selectedLoanId=null; state.fvm.pickKind=null;
+  RAW['in-fvm-lump']='';
   closeSheet();
 }
 function fvmActiveSeries(){
