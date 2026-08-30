@@ -266,6 +266,53 @@ details.legend-box p{ margin:8px 0 0; }
 @media (max-height:480px) and (orientation:landscape){
   .tab-header-sticky, #fvmJump, #incomeJump, #incomeTimelineLabel{ display:none; }
 }
+
+/* ============ TIGHTENING PASS — visual polish only, no layout/behavior changes ============
+   Smooth, quick transitions and real press feedback on everything tappable; a hint of depth
+   on raised surfaces instead of flat borders alone; refined toggle/button/chip rendering;
+   tighter tracking on large mono numerals to match .big-number's existing -.02em. Every rule
+   here is additive — nothing above is edited, so any of this can be reverted by deleting this
+   block alone. */
+.chip, .tabbtn, .iconbtn, .btn, .link, .seg button, .amort-jump button, .list-card, .prop-card,
+.selectchip, .btn-ghost-sm, .back, .toggle, .info-btn, .badge, .entry-actions button{
+  transition: background-color .14s ease, border-color .14s ease, color .14s ease, opacity .14s ease, transform .1s ease, box-shadow .14s ease;
+}
+.chip:active, .tabbtn:active, .iconbtn:active, .btn:active, .seg button:active,
+.amort-jump button:active, .list-card:active, .selectchip:active, .btn-ghost-sm:active,
+.info-btn:active, .badge:active{
+  transform: scale(.96); opacity:.85;
+}
+.link:active, .back:active{ opacity:.6; }
+.prop-card:active{ transform: scale(.985); }
+
+/* Depth: a soft ambient shadow on raised surfaces, on top of the existing border rather than
+   replacing it — negligible on dark backgrounds (as intended, borders already do the work
+   there), gives real lift in light mode where a border alone reads flat. */
+.card, .prop-card, .list-card, .stat-pill, .az-section, .sheet, .amort-window, .legend-box,
+details.legend-box[open], .impact-block{
+  box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 1px 1px rgba(0,0,0,.03);
+}
+.sheet{ box-shadow: 0 -4px 24px rgba(0,0,0,.12), 0 -1px 2px rgba(0,0,0,.06); }
+
+/* Toggle: a real knob shadow (the flat-color knob read like a placeholder) */
+.toggle .knob{ box-shadow: 0 1px 3px rgba(0,0,0,.25), 0 1px 1px rgba(0,0,0,.15); }
+.toggle.on{ box-shadow: inset 0 1px 2px rgba(0,0,0,.12); }
+
+/* Buttons: a faint top highlight for a touch more dimensionality on the primary/status pills,
+   restrained enough to hold up in both themes */
+.btn-primary, .btn-planned, .btn-confirm, .amort-jump button.active, .seg button.active, .chip.active{
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 1px 2px rgba(0,0,0,.08);
+}
+
+/* Tighter tracking on large tabular numerals, matching .big-number's existing rhythm */
+.big-stat .v, .prop-balance, .stat-pill .v, .metric .v, .impact-row .value{ letter-spacing:-.01em; }
+
+/* Keyboard focus — invisible today; a clean ring instead of the browser default */
+button:focus-visible, .chip:focus-visible, .tabbtn:focus-visible, .iconbtn:focus-visible,
+.btn:focus-visible, .link:focus-visible, .back:focus-visible, .toggle:focus-visible,
+input:focus-visible, select:focus-visible, .list-card:focus-visible, .prop-card:focus-visible{
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
 </style>
 </head>
 <body>
@@ -296,6 +343,9 @@ function setTheme(t){
 })();
 
 /* ============ DATA (real, reconciled Jul 2026) ============ */
+// Bumped by hand on every deploy (date + same-day counter) — shown at the bottom of
+// Settings so it's easy to confirm which build is actually running on a given device.
+const APP_VERSION = '2026.08.30-1';
 const _now = new Date();
 const TODAY = new Date(_now.getFullYear(), _now.getMonth(), 1); // always the current month, for real ongoing use
 
@@ -333,8 +383,9 @@ const properties = [
     loans:[] }
 ];
 function allLoansOf(prop){ return [...prop.loans, ...(prop.otherLoans||[])]; }
-let _nextPropId = 1;
-function newPropId(){ return 'prop'+(_nextPropId++); }
+// Random, not sequential — must stay collision-safe across devices once synced (two
+// devices creating a property in their own session must never generate the same id).
+function newPropId(){ return 'prop'+Math.random().toString(36).slice(2,10); }
 /* New properties start debt-free (no loans) — that's the simplest existing editable view
    (renderDebtFreePropertyDetail, reusing renderRevenueSection/renderCostsSection as-is) and
    avoids inventing a committed/draft convention that every properties.forEach in the app
@@ -415,13 +466,13 @@ function propLoan_set(loanId, field, val){
   render();
 }
 /* ---- Standalone loans (not tied to any property) ---- */
-let _nextStandaloneLoanId = 1;
-function newStandaloneLoanId(){ return 'sl'+(_nextStandaloneLoanId++); }
+// Random, not sequential — see newPropId() above for why (sync collision-safety).
+function newStandaloneLoanId(){ return 'sl'+Math.random().toString(36).slice(2,10); }
 const standaloneLoans = [];
 /* Household-level spending overrides — e.g. a bigger draw Oct-Dec to cover an estimated tax bill,
    then automatically back to the normal baseline after the end date. */
-let _nextSpendingOverrideId = 1;
-function newSpendingOverrideId(){ return 'sov'+(_nextSpendingOverrideId++); }
+// Random, not sequential — see newPropId() above for why (sync collision-safety).
+function newSpendingOverrideId(){ return 'sov'+Math.random().toString(36).slice(2,10); }
 const householdSpendingOverrides = [];
 /* ---- Personal spending log ("Spent") — envelope-style accounts with a real transaction
    history, ported from a standalone companion app (same data shape, restyled to live inside
@@ -627,14 +678,6 @@ function spend_routeToDefault(){
     state.spendNav.screen='accounts';
   }
 }
-/* Legacy entry point (Settings > Personal spending > Spending log) — still uses the single
-   push({type:'spend'}) slot, with its own Back button (see spend_showExitBack()). The main
-   tab bar's Spent button uses spend_goTab() instead, which lands in the same place but as a
-   first-class tab with no Back button, same as FVM/Income/Portfolio/P&L. */
-function spend_open(){
-  spend_routeToDefault();
-  push({type:'spend'});
-}
 /* "Home" — exactly one account exists, so there's no meaningful list to show; the account's
    own screen jumps straight back out to FinApp instead of a one-item Accounts list. Purely
    a function of how many accounts exist right now, not a separate settings toggle to keep
@@ -673,6 +716,7 @@ function spend_saveAccountForm(){
     spendAccounts.push({ id:spendUid(), name, recurring:[], transactions: signed!==0 ? [{id:spendUid(), date:spendTodayISO(), description:'Starting Balance', amount:signed}] : [] });
   }
   saveLocalData();
+  syncNudge();
   closeSheet();
 }
 function spend_deleteAccount(id){
@@ -680,6 +724,7 @@ function spend_deleteAccount(id){
   if(idx>=0) spendAccounts.splice(idx,1);
   if(state.settings.spend.defaultAccountId===id) state.settings.spend.defaultAccountId=null;
   saveLocalData();
+  syncNudge();
   closeSheet();
   state.spendNav.screen='accounts';
   render();
@@ -711,12 +756,14 @@ function spend_saveTxForm(){
     acct.transactions.push({ id:spendUid(), date:spendTodayISO(), description:desc, amount:signed, category });
   }
   saveLocalData();
+  syncNudge();
   closeSheet();
 }
 function spend_deleteTx(acctId, txId){
   const acct = spendGetAccount(acctId);
   acct.transactions = acct.transactions.filter(t=>t.id!==txId);
   saveLocalData();
+  syncNudge();
   closeSheet();
   render();
 }
@@ -748,12 +795,14 @@ function spend_saveRecurringForm(){
     acct.recurring.push({ id:spendUid(), description:desc, amount:amt, frequency:freq, firstDate:first, type:s.kind });
   }
   saveLocalData();
+  syncNudge();
   closeSheet();
 }
 function spend_deleteRecurring(acctId, ruleId){
   const acct = spendGetAccount(acctId);
   acct.recurring = acct.recurring.filter(r=>r.id!==ruleId);
   saveLocalData();
+  syncNudge();
   closeSheet();
   render();
 }
@@ -1471,7 +1520,7 @@ const state = { tab:'fvm', pushed:null, sheet:null, sheetEdit:false, propEdit:fa
       fedBrackets:[ {threshold:0, rate:10}, {threshold:23200, rate:12}, {threshold:94300, rate:22}, {threshold:201050, rate:24} ],
       stateKey:'MT', stateRate:5, otherIncome:0, otherQualifiedIncome:0, useNIIT:true, bracketInflationPct:2.5, dueMonths:[4,6,9,1] },
     spend:{ importVisible:true, defaultAccountId:null } },
-  settingsOpen:{ general:true, pm:false, estTax:false },
+  settingsOpen:{ general:true, sync:false, pm:false, estTax:false },
   portfolioAnalyzerOpen:false,
   spendCompare:{ a:null, b:null },
   spendNav:{ screen:'accounts', currentAccountId:null },
@@ -1492,7 +1541,10 @@ const state = { tab:'fvm', pushed:null, sheet:null, sheetEdit:false, propEdit:fa
     // picked, so that logic can't silently clobber a loan pick back to an investment.
     pickKind:null,
     whatIfOpen:false, saleOpen:false, salePropId:null, salePrice:0, saleCostPct:7, saleTaxPct:20 },
-  lastSyncAt:null
+  lastSyncAt:null,
+  // serverUrl/token persist separately (see syncSaveMeta/syncLoadMeta below, not
+  // saveLocalData/loadLocalData) — status/lastError are transient, recomputed each cycle.
+  sync:{ serverUrl:'', token:'', status:'idle', lastError:null }
 };
 
 /* ============ LOCAL PERSISTENCE + EXPORT/IMPORT ============ */
@@ -1526,6 +1578,246 @@ function loadLocalData(){
   }
   spendCategories.sort((a,b)=>a.order-b.order);
 }
+
+/* ============ SYNC ============
+   Additive layer on top of everything above — saveLocalData()/loadLocalData()/render()
+   are untouched, so the app works exactly as before with no server configured. When a
+   server URL + token are set (Settings > Sync), this diffs the live collections against
+   a snapshot of what was last successfully synced, pushes what changed (including
+   tombstones for anything deleted locally), pulls whatever changed on the server since
+   the last pull, and merges both directions into the live arrays. Conflict resolution is
+   last-write-wins per record (by each record's own stamped time, not receipt order) —
+   deliberately not a full CRDT; see the plan doc for why that's the right tradeoff here.
+   Named syncPush/syncPull/syncCycle, not push/pull — push(view) already exists (nav stack). */
+const SYNC_META_KEY = 'finapp-sync-meta-v1';
+// Module-level, not in `state` — this is bookkeeping for the sync engine itself, not
+// something any render() call needs to react to. `snapshot` mirrors exactly what the
+// server has already accepted from this device; `lastPulledAt` is the server-time
+// watermark from the last successful pull (server time, not client time, sidesteps
+// clock skew on the pull side specifically).
+let SYNC = { snapshot:null, lastPulledAt:0, inFlight:false, timer:null, spendDebounce:null };
+
+function syncSaveMeta(){
+  try{
+    localStorage.setItem(SYNC_META_KEY, JSON.stringify({
+      serverUrl: state.sync.serverUrl, token: state.sync.token,
+      lastPulledAt: SYNC.lastPulledAt, snapshot: SYNC.snapshot
+    }));
+  }catch(e){}
+}
+function syncLoadMeta(){
+  try{
+    const raw = localStorage.getItem(SYNC_META_KEY);
+    if(!raw) return;
+    const m = JSON.parse(raw);
+    state.sync.serverUrl = m.serverUrl || '';
+    state.sync.token = m.token || '';
+    SYNC.lastPulledAt = m.lastPulledAt || 0;
+    SYNC.snapshot = m.snapshot || null;
+  }catch(e){}
+}
+
+/* ---- diffing live collections against the last-synced snapshot ---- */
+function syncDiffArray(prevArr, curArr){
+  const prevById = {};
+  (prevArr||[]).forEach(r=>{ prevById[r.id]=r; });
+  const curIds = new Set();
+  const dirty = [];
+  (curArr||[]).forEach(r=>{
+    curIds.add(r.id);
+    const prev = prevById[r.id];
+    if(!prev || JSON.stringify(prev)!==JSON.stringify(r)) dirty.push(r);
+  });
+  const tombstones = (prevArr||[]).filter(r=>!curIds.has(r.id));
+  return { dirty, tombstones };
+}
+// spendAccounts sync minus its nested transactions/recurring — those are their own
+// collections server-side, so two people's transactions on the same account merge by
+// record instead of colliding at the whole-account level. The live in-memory shape is
+// untouched; this is purely a wire-format view built fresh each diff.
+function syncSpendAccountsForDiff(){
+  return spendAccounts.map(a=>{ const {transactions, recurring, ...rest} = a; return rest; });
+}
+function syncSpendTransactionsForDiff(){
+  const out = [];
+  spendAccounts.forEach(a=>(a.transactions||[]).forEach(t=>out.push(Object.assign({}, t, {accountId:a.id}))));
+  return out;
+}
+function syncSpendRecurringForDiff(){
+  const out = [];
+  spendAccounts.forEach(a=>(a.recurring||[]).forEach(r=>out.push(Object.assign({}, r, {accountId:a.id}))));
+  return out;
+}
+// settings gets a patch (only the top-level keys that actually changed, one level deep
+// into tax{}/spend{}), not the whole blob — the server does a per-key shallow merge on
+// its end, so a whole-blob push here would defeat that (it would just look like every
+// key changed). Returns null when nothing changed.
+function syncDiffSettingsPatch(prevSettings, curSettings){
+  const patch = {}; let changed = false;
+  const prev = prevSettings || {};
+  Object.keys(curSettings||{}).forEach(key=>{
+    const curVal = curSettings[key];
+    if((key==='tax'||key==='spend') && curVal && typeof curVal==='object'){
+      const prevSub = prev[key]||{}; const subPatch = {}; let subChanged=false;
+      Object.keys(curVal).forEach(k=>{
+        if(JSON.stringify(prevSub[k])!==JSON.stringify(curVal[k])){ subPatch[k]=curVal[k]; subChanged=true; }
+      });
+      if(subChanged){ patch[key]=subPatch; changed=true; }
+    } else if(JSON.stringify(prev[key])!==JSON.stringify(curVal)){
+      patch[key]=curVal; changed=true;
+    }
+  });
+  return changed ? patch : null;
+}
+const SYNC_ARRAY_COLLECTIONS = {
+  properties: ()=>properties, investments: ()=>investments, standaloneLoans: ()=>standaloneLoans,
+  householdSpendingOverrides: ()=>householdSpendingOverrides, analyzerSamples: ()=>analyzerSamples,
+  spendCategories: ()=>spendCategories
+};
+function syncBuildDirtyRecords(){
+  const snap = SYNC.snapshot || {};
+  const now = Date.now();
+  const records = [];
+  Object.keys(SYNC_ARRAY_COLLECTIONS).forEach(coll=>{
+    const {dirty, tombstones} = syncDiffArray(snap[coll], SYNC_ARRAY_COLLECTIONS[coll]());
+    dirty.forEach(r=>records.push({collection:coll, id:r.id, data:r, deleted:false, updatedAt:now}));
+    tombstones.forEach(r=>records.push({collection:coll, id:r.id, data:null, deleted:true, updatedAt:now}));
+  });
+  const acctDiff = syncDiffArray(snap.spendAccounts, syncSpendAccountsForDiff());
+  acctDiff.dirty.forEach(r=>records.push({collection:'spendAccounts', id:r.id, data:r, deleted:false, updatedAt:now}));
+  acctDiff.tombstones.forEach(r=>records.push({collection:'spendAccounts', id:r.id, data:null, deleted:true, updatedAt:now}));
+  const txDiff = syncDiffArray(snap.spendTransactions, syncSpendTransactionsForDiff());
+  txDiff.dirty.forEach(r=>records.push({collection:'spendTransactions', id:r.id, accountId:r.accountId, data:r, deleted:false, updatedAt:now}));
+  txDiff.tombstones.forEach(r=>records.push({collection:'spendTransactions', id:r.id, accountId:r.accountId, data:null, deleted:true, updatedAt:now}));
+  const recDiff = syncDiffArray(snap.spendRecurring, syncSpendRecurringForDiff());
+  recDiff.dirty.forEach(r=>records.push({collection:'spendRecurring', id:r.id, accountId:r.accountId, data:r, deleted:false, updatedAt:now}));
+  recDiff.tombstones.forEach(r=>records.push({collection:'spendRecurring', id:r.id, accountId:r.accountId, data:null, deleted:true, updatedAt:now}));
+  const settingsPatch = syncDiffSettingsPatch(snap.settings, state.settings);
+  if(settingsPatch) records.push({collection:'settings', id:'household', data:settingsPatch, deleted:false, updatedAt:now});
+  return records;
+}
+function syncDeepClone(v){ return v==null ? v : JSON.parse(JSON.stringify(v)); }
+function syncRefreshSnapshot(){
+  SYNC.snapshot = {
+    properties: syncDeepClone(properties), investments: syncDeepClone(investments),
+    standaloneLoans: syncDeepClone(standaloneLoans), householdSpendingOverrides: syncDeepClone(householdSpendingOverrides),
+    analyzerSamples: syncDeepClone(analyzerSamples), spendCategories: syncDeepClone(spendCategories),
+    spendAccounts: syncDeepClone(syncSpendAccountsForDiff()), spendTransactions: syncDeepClone(syncSpendTransactionsForDiff()),
+    spendRecurring: syncDeepClone(syncSpendRecurringForDiff()), settings: syncDeepClone(state.settings)
+  };
+}
+
+/* ---- applying a record (from a pull, or a push response's "winner") into live state ----
+   Same function serves both directions: a pull result and a push response's `applied`
+   array have the identical shape, and both need the identical merge-into-live-arrays
+   treatment. Relies on the server always listing a spendAccounts record before any of
+   that account's spendTransactions/spendRecurring records within one response (true by
+   construction — see sync-server/src/lib/merge.js's COLLECTION_TABLE order) so a
+   brand-new account's transactions never arrive before the account itself exists locally. */
+let SYNC_TOUCHED_LOANS = false;
+function syncApplyRecord(rec){
+  if(rec.collection==='properties' || rec.collection==='standaloneLoans') SYNC_TOUCHED_LOANS = true;
+  if(rec.collection==='settings'){
+    // Server already performed the shallow per-key merge and returns the full result.
+    Object.assign(state.settings, rec.data);
+    return;
+  }
+  if(rec.collection==='spendTransactions' || rec.collection==='spendRecurring'){
+    const acct = spendAccounts.find(a=>a.id===rec.accountId);
+    if(!acct) return; // account not present yet (or already deleted) — safe no-op
+    const listName = rec.collection==='spendTransactions' ? 'transactions' : 'recurring';
+    if(!acct[listName]) acct[listName] = [];
+    const idx = acct[listName].findIndex(x=>x.id===rec.id);
+    if(rec.deleted){ if(idx>=0) acct[listName].splice(idx,1); }
+    else if(idx>=0) acct[listName][idx] = rec.data;
+    else acct[listName].push(rec.data);
+    return;
+  }
+  if(rec.collection==='spendAccounts'){
+    const idx = spendAccounts.findIndex(a=>a.id===rec.id);
+    if(rec.deleted){ if(idx>=0) spendAccounts.splice(idx,1); return; }
+    if(idx>=0){
+      const prevChildren = { transactions: spendAccounts[idx].transactions||[], recurring: spendAccounts[idx].recurring||[] };
+      spendAccounts[idx] = Object.assign({}, rec.data, prevChildren);
+    } else {
+      spendAccounts.push(Object.assign({}, rec.data, {transactions:[], recurring:[]}));
+    }
+    return;
+  }
+  const arr = SYNC_ARRAY_COLLECTIONS[rec.collection] ? SYNC_ARRAY_COLLECTIONS[rec.collection]() : null;
+  if(!arr) return;
+  const idx = arr.findIndex(r=>r.id===rec.id);
+  if(rec.deleted){ if(idx>=0) arr.splice(idx,1); }
+  else if(idx>=0) arr[idx] = rec.data;
+  else arr.push(rec.data);
+}
+
+async function syncHttp(method, path, body){
+  const base = (state.sync.serverUrl||'').replace(/\/+$/,'');
+  const res = await fetch(base+path, {
+    method,
+    headers: Object.assign({'Authorization':'Bearer '+state.sync.token}, body?{'Content-Type':'application/json'}:{}),
+    body: body ? JSON.stringify(body) : undefined
+  });
+  if(!res.ok){
+    let msg = 'HTTP '+res.status;
+    try{ const j = await res.json(); if(j&&j.error) msg = j.error; }catch(e){}
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
+async function syncCycle(manual){
+  if(!state.sync.serverUrl || !state.sync.token) return;
+  if(SYNC.inFlight) return;
+  SYNC.inFlight = true;
+  if(manual){ state.sync.status='checking'; render(); }
+  SYNC_TOUCHED_LOANS = false;
+  try{
+    const dirty = syncBuildDirtyRecords();
+    if(dirty.length){
+      const pushResult = await syncHttp('POST', '/sync/push', {records:dirty});
+      pushResult.applied.forEach(syncApplyRecord);
+    }
+    const pullResult = await syncHttp('GET', '/sync/pull?since='+SYNC.lastPulledAt);
+    pullResult.records.forEach(syncApplyRecord);
+    SYNC.lastPulledAt = pullResult.serverNow;
+    syncRefreshSnapshot();
+    if(SYNC_TOUCHED_LOANS){
+      for(const k in SCHED) delete SCHED[k];
+      for(const k in SCHED_INDEX) delete SCHED_INDEX[k];
+    }
+    state.sync.status = 'connected';
+    state.sync.lastError = null;
+    state.lastSyncAt = new Date().toISOString();
+    syncSaveMeta();
+    saveLocalData();
+    render();
+  }catch(e){
+    state.sync.status = 'error';
+    state.sync.lastError = e.message || 'Sync failed';
+    render();
+  }finally{
+    SYNC.inFlight = false;
+  }
+}
+function sync_setServerUrl(v){ RAW['in-sync-url']=v; state.sync.serverUrl=v.trim(); syncSaveMeta(); }
+function sync_setToken(v){ RAW['in-sync-token']=v; state.sync.token=v.trim(); syncSaveMeta(); }
+function sync_now(){ syncCycle(true); }
+// One immediate-ish cycle a few seconds after a Spend edit (the named priority use
+// case), on top of the general periodic loop below — Spend mutators call this directly.
+function syncNudge(){
+  if(SYNC.spendDebounce) clearTimeout(SYNC.spendDebounce);
+  SYNC.spendDebounce = setTimeout(()=>syncCycle(false), 2500);
+}
+function syncInit(){
+  syncLoadMeta();
+  setInterval(()=>syncCycle(false), 25000);
+  document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='visible') syncCycle(false); });
+  window.addEventListener('online', ()=>syncCycle(false));
+  syncCycle(false);
+}
+
 function fmtDateTime(iso){
   if(!iso) return null;
   const d = new Date(iso);
@@ -2590,7 +2882,7 @@ function renderSheet(){
     const isIncome = ['rent','lease','invReturn'].includes(category);
     const color = category==='mortgagePrincipal' ? 'var(--text-dim)' : isIncome ? 'var(--principal)' : 'var(--interest)';
     const rows = plBreakdownRows(category).filter(r=>Math.abs(r.amount)>0.5);
-    const rowsHtml = rows.length ? rows.map(r=>`<div class="row-line"><span class="l">${escHtml(r.name)}</span><span class="v" style="color:${color};">${fmt$(r.amount)}</span></div>`).join('') : `<div class="dim" style="font-size:12.5px;">Nothing to show.</div>`;
+    const rowsHtml = rows.length ? rows.map(r=>`<div class="row-line"><span class="l">${r.name}</span><span class="v" style="color:${color};">${fmt$(r.amount)}</span></div>`).join('') : `<div class="dim" style="font-size:12.5px;">Nothing to show.</div>`;
     return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
       <div class="sheet-handle"></div>
       ${sheetHead(PL_TITLES[category]||category, fmtMonth(TODAY), false)}
@@ -2608,7 +2900,7 @@ function renderSheet(){
       const onclick = isLoan ? `closeSheet(); push({type:'loan', id:'${c.id}'})` : `closeSheet(); push({type:'investment', id:'${c.id}'})`;
       return `<div class="list-card" onclick="${onclick}">
         <div class="prop-top">
-          <div><div class="prop-name" style="font-size:14px;">${i+1}. ${escHtml(c.name)}</div><div class="prop-sub">${action} &middot; ${detail}</div></div>
+          <div><div class="prop-name" style="font-size:14px;">${i+1}. ${c.name}</div><div class="prop-sub">${action} &middot; ${detail}</div></div>
           <div style="text-align:right;"><div class="prop-balance" style="font-size:15px;">${fmtPct(c.rate)}</div></div>
         </div>
         ${flag}
@@ -2616,7 +2908,7 @@ function renderSheet(){
     }).join('');
     const losingHtml = losingProps.map(p=>`<div class="list-card" onclick="closeSheet(); fvm_previewSale('${p.id}')">
       <div class="prop-top">
-        <div><div class="prop-name" style="font-size:14px;">${escHtml(p.name)}</div><div class="prop-sub">Losing ${fmtSigned$(p.cashFlow)}/mo</div></div>
+        <div><div class="prop-name" style="font-size:14px;">${p.name}</div><div class="prop-sub">Losing ${fmtSigned$(p.cashFlow)}/mo</div></div>
         <span class="link" style="font-size:12px;">Preview selling &rsaquo;</span>
       </div>
     </div>`).join('');
@@ -2658,8 +2950,8 @@ function renderSheet(){
     const nw = netWorthTotals();
     const rows = properties.map(p=>({ name: displayName(p), amount: propertyEquity(p) }));
     const rowsHtml = rows.map(r=> r.amount==null
-      ? `<div class="row-line"><span class="l">${escHtml(r.name)}</span><span class="v dim" style="font-size:12px;">No value set</span></div>`
-      : `<div class="row-line"><span class="l">${escHtml(r.name)}</span><span class="v" style="color:${r.amount>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(r.amount)}</span></div>`
+      ? `<div class="row-line"><span class="l">${r.name}</span><span class="v dim" style="font-size:12px;">No value set</span></div>`
+      : `<div class="row-line"><span class="l">${r.name}</span><span class="v" style="color:${r.amount>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(r.amount)}</span></div>`
     ).join('');
     return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
       <div class="sheet-handle"></div>
@@ -2689,7 +2981,7 @@ function renderSheet(){
     };
     const colorMap = {balance:'var(--text)', interest:'var(--interest)', principal:'var(--principal)', ip:'var(--accent)'};
     const rows = portfolioBreakdownRows(kind).filter(r=> kind==='ip' ? true : r.amount>0.5);
-    const rowsHtml = rows.length ? rows.map(r=>`<div class="row-line"><span class="l">${escHtml(r.name)}</span><span class="v" style="color:${colorMap[kind]};">${kind==='ip'?fmtRatio(r.amount):fmt$(r.amount)}</span></div>`).join('') : `<div class="dim" style="font-size:12.5px;">Nothing to show.</div>`;
+    const rowsHtml = rows.length ? rows.map(r=>`<div class="row-line"><span class="l">${r.name}</span><span class="v" style="color:${colorMap[kind]};">${kind==='ip'?fmtRatio(r.amount):fmt$(r.amount)}</span></div>`).join('') : `<div class="dim" style="font-size:12.5px;">Nothing to show.</div>`;
     const totalVal = kind==='balance'?fmt$(tot.balance) : kind==='interest'?fmt$(tot.interest) : kind==='principal'?fmt$(tot.principal) : fmtRatio(tot.ip);
     return `<div class="overlay" onclick="if(event.target===this) closeSheet()"><div class="sheet">
       <div class="sheet-handle"></div>
@@ -3906,7 +4198,7 @@ function cas_loanParams(){
   const row = currentRow(c.selectedId);
   const remMonths = Math.max(1, Math.round(yearsLeft(c.selectedId)*12));
   const entry = allocationLoans().find(e=>e.loan.id===c.selectedId);
-  return { balance: row.balance, rate: loan.rate, termMonths: remMonths, name: entry ? entry.displayName : loan.label };
+  return { balance: row.balance, rate: loan.rate, termMonths: remMonths, name: entry ? entry.displayName : escHtml(loan.label) };
 }
 function cas_set(field, val){ state.cas[field] = numFrom(val); render(); }
 function cas_selectLoan(id){ state.cas.selectedId = id; render(); }
@@ -3927,14 +4219,14 @@ function renderPrepayAnalysis(){
   const netPositive = r.netAdvantage>=0;
 
   const decisionText = netPositive
-    ? `At <b>${fmt$(c.prepay)}</b> toward ${escHtml(loanParams.name)}, prepaying now leaves you about <b>${fmt$(Math.abs(r.netAdvantage))} ahead</b> of keeping that money invested at a ${fmtPct(c.grossReturn)} gross return over ${horizonLabel}, assuming a ${fmtPct(c.taxRate)} tax rate on investment earnings.`
-    : `At <b>${fmt$(c.prepay)}</b> toward ${escHtml(loanParams.name)}, keeping the money invested is modeled to leave you about <b>${fmt$(Math.abs(r.netAdvantage))} ahead</b> over ${horizonLabel} instead.`;
+    ? `At <b>${fmt$(c.prepay)}</b> toward ${loanParams.name}, prepaying now leaves you about <b>${fmt$(Math.abs(r.netAdvantage))} ahead</b> of keeping that money invested at a ${fmtPct(c.grossReturn)} gross return over ${horizonLabel}, assuming a ${fmtPct(c.taxRate)} tax rate on investment earnings.`
+    : `At <b>${fmt$(c.prepay)}</b> toward ${loanParams.name}, keeping the money invested is modeled to leave you about <b>${fmt$(Math.abs(r.netAdvantage))} ahead</b> over ${horizonLabel} instead.`;
 
   const optimalIsMax = Math.abs(optimal.p - loanParams.balance) < loanParams.balance*0.01;
   const optimalIsZero = optimal.p < loanParams.balance*0.01;
   const dipsNegative = series.some(s=>s.net < -1);
   let optimalNote;
-  if(optimalIsZero) optimalNote = `At these assumptions, investing beats prepaying at every amount tested &mdash; the optimal prepayment on ${escHtml(loanParams.name)} is $0.`;
+  if(optimalIsZero) optimalNote = `At these assumptions, investing beats prepaying at every amount tested &mdash; the optimal prepayment on ${loanParams.name} is $0.`;
   else if(optimalIsMax && !dipsNegative) optimalNote = `At these assumptions, more prepayment keeps helping all the way to payoff &mdash; the optimal amount is the full balance, ${fmt$(loanParams.balance)}.`;
   else if(optimalIsMax && dipsNegative) optimalNote = `Not a straight line: the modeled result dips <i>negative</i> for a stretch of partial prepayments before recovering &mdash; investing briefly wins in the middle of the range. Full payoff still comes out ahead overall.`;
   else optimalNote = `Net advantage peaks at ${fmt$(optimal.p)}, not at either extreme &mdash; worth checking the full curve below, not just this number.`;
@@ -3961,7 +4253,7 @@ function renderPrepayAnalysis(){
   <div class="az-sticky">
     <div class="sheet-handle" style="display:none;"></div>
     <div style="font-size:17px; font-weight:700;">Pay Down Debt or Invest?</div>
-    <div class="dim" style="font-size:12px; margin-top:2px;">${escHtml(loanParams.name)} &middot; ${fmt$(c.prepay)} prepayment</div>
+    <div class="dim" style="font-size:12px; margin-top:2px;">${loanParams.name} &middot; ${fmt$(c.prepay)} prepayment</div>
     <div class="big-number" style="margin-top:6px; font-size:30px; color:${netPositive?'var(--principal)':'var(--interest)'}">${fmtSigned$(r.netAdvantage)}</div>
     <div class="dim" style="font-size:11.5px; margin-top:2px;">Net advantage of prepaying, over ${horizonLabel}</div>
     <div class="stat-row" style="margin-top:10px;">
@@ -4053,7 +4345,7 @@ function renderPrepayAnalysis(){
     ${considered.length===0? `<div class="dim" style="font-size:12px;">No loans left above ${fmtRatio(c.ipThreshold)} I/P &mdash; lower the threshold to see more.</div>` : ''}
     ${considered.map((x,i)=>`
     <div class="row-line" style="${x.id===c.selectedId?'background:var(--accent-soft); margin:0 -8px; padding:9px 8px; border-radius:8px; border-bottom:none;':''}">
-      <span class="l" style="color:var(--text); font-weight:${x.id===c.selectedId?'700':'400'};">${i+1}. ${escHtml(x.name)}${x.applied<c.prepay?' <span class="faint">(capped)</span>':''}</span>
+      <span class="l" style="color:var(--text); font-weight:${x.id===c.selectedId?'700':'400'};">${i+1}. ${x.name}${x.applied<c.prepay?' <span class="faint">(capped)</span>':''}</span>
       <span class="v mono" style="text-align:right;">
         <span style="color:${x.net>=0?'var(--principal)':'var(--interest)'}">${fmtSigned$(x.net)}</span>
         <span class="faint" style="font-size:10.5px; display:block;">${fmtRatio(x.ip)} I/P &middot; ${Math.floor(x.termMonths/12)}y ${x.termMonths%12}mo left</span>
@@ -4061,7 +4353,7 @@ function renderPrepayAnalysis(){
     </div>`).join('')}
     ${excluded.length>0 ? `
     <div class="dim" style="font-size:11px; text-transform:uppercase; letter-spacing:.05em; font-weight:700; margin:14px 0 4px;">Excluded &mdash; below ${fmtRatio(c.ipThreshold)} I/P</div>
-    ${excluded.map(x=>`<div class="row-line"><span class="l faint">${escHtml(x.name)}</span><span class="v faint mono">${fmtRatio(x.ip)} I/P</span></div>`).join('')}
+    ${excluded.map(x=>`<div class="row-line"><span class="l faint">${x.name}</span><span class="v faint mono">${fmtRatio(x.ip)} I/P</span></div>`).join('')}
     ` : ''}
   `)}
 
@@ -4762,10 +5054,8 @@ function renderSettings(){
         <button class="${s.numberStyle==='rounded'?'active':''}" onclick="settings_setNumberStyle('rounded')">Rounded</button>
         <button class="${s.numberStyle==='compact'?'active':''}" onclick="settings_setNumberStyle('compact')">Compact (K/M)</button>
       </div>
-      <div class="row-line"><span class="l">Spending log</span><button class="selectchip" onclick="spend_open()">Open</button></div>
       <div class="row-line"><span class="l">Personal spending</span><button class="selectchip" onclick="openSheet({type:'incomeAdjust'})">Open</button></div>
-      <div class="row-line" style="margin-top:4px;"><span class="l">Last synced</span><span class="v" style="font-family:var(--font-ui); font-weight:600; font-size:13px;">${state.lastSyncAt?fmtDateTime(state.lastSyncAt):'Never'}</span></div>
-      <div class="row-line"><span class="l">Export data (.json)</span><button class="selectchip" onclick="exportData()">Export</button></div>
+      <div class="row-line" style="margin-top:4px;"><span class="l">Export data (.json)</span><button class="selectchip" onclick="exportData()">Export</button></div>
       <div class="row-line"><span class="l">Import data (.json)</span><button class="selectchip" onclick="triggerImport()">Import</button></div>
       <input id="importFileInput" type="file" accept="application/json,.json" style="display:none" onchange="handleImportFile(this)"/>
       ${state.importStatus ? `<div class="dim" style="font-size:12px; margin-top:-4px; margin-bottom:8px; color:${state.importStatus.ok?'var(--principal)':'var(--danger)'};">${state.importStatus.msg}</div>` : ''}
@@ -4776,6 +5066,23 @@ function renderSettings(){
       <details class="footnote" style="margin-top:8px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">Everything you enter is saved on this device automatically, and that saved copy is what loads every time &mdash; including ahead of any update to the app itself, so a new property or feature can be invisible here until you reset. Export creates a file you can send to someone else (or save to a shared folder like iCloud Drive) &mdash; they Import it into their own copy to get your numbers. Reset clears what's saved on this device and reloads the app's built-in data instead &mdash; use it after an update, or Export first if you want to keep your changes. Nothing is ever uploaded anywhere on its own.</div></details>
     </div>` : ''}
   </div>
+
+  ${settingsSection('sync', 'Sync', `
+    <div class="dim" style="font-size:12px; margin-bottom:8px;">Auto-syncs with a server you self-host &mdash; nothing is sent anywhere until you set this up. See the sync-server README for setup.</div>
+    <div class="section-label" style="margin-top:0;">Server URL</div>
+    <input type="text" value="${escHtml(rv('in-sync-url', state.sync.serverUrl))}" oninput="sync_setServerUrl(this.value)" placeholder="https://your-nas.your-tailnet.ts.net" style="width:100%; background:var(--surface-2); border:1px solid var(--border); border-radius:10px; padding:10px 12px; color:var(--text); font-family:var(--font-ui); font-size:14px; outline:none; box-sizing:border-box;"/>
+    <div class="section-label">Token</div>
+    <input type="password" value="${escHtml(rv('in-sync-token', state.sync.token))}" oninput="sync_setToken(this.value)" placeholder="Shared sync token" style="width:100%; background:var(--surface-2); border:1px solid var(--border); border-radius:10px; padding:10px 12px; color:var(--text); font-family:var(--font-ui); font-size:14px; outline:none; box-sizing:border-box; margin-bottom:10px;"/>
+    <div class="row-line">
+      <span class="l">Status</span>
+      <span class="v" style="font-size:13px; font-weight:600; color:${state.sync.status==='connected'?'var(--principal)':state.sync.status==='error'?'var(--danger)':'var(--text-dim)'};">
+        ${!state.sync.serverUrl||!state.sync.token ? 'Not configured' : state.sync.status==='checking' ? 'Checking&hellip;' : state.sync.status==='connected' ? 'Connected' : state.sync.status==='error' ? 'Error' : 'Idle'}
+      </span>
+    </div>
+    ${state.sync.status==='error' && state.sync.lastError ? `<div class="dim" style="font-size:12px; color:var(--danger); margin-top:-4px; margin-bottom:8px;">${escHtml(state.sync.lastError)}</div>` : ''}
+    <div class="row-line" style="margin-top:4px;"><span class="l">Last synced</span><span class="v" style="font-family:var(--font-ui); font-weight:600; font-size:13px;">${state.lastSyncAt?fmtDateTime(state.lastSyncAt):'Never'}</span></div>
+    <div style="text-align:right; margin-top:10px;"><button class="selectchip" onclick="sync_now()">Sync now</button></div>
+  `)}
 
   ${settingsSection('pm', 'Property management fees', `
     ${properties.filter(p=>!p.nnn).map(p=>`
@@ -4868,6 +5175,8 @@ function renderSettings(){
     </div>
     <details class="footnote" style="margin-top:10px;"><summary class="info-btn">&#9432;</summary><div class="footnote-body">A planning estimate, not a real tax calculation &mdash; no Form 1040, Schedule E, AMT, or credits. Computed as household tax WITH FVM's income minus WITHOUT it, so it reflects where FVM income actually lands in your brackets. Each property pays tax on its own taxable income (set per-property, not cash flow &mdash; see each property's Value section); each investment pays on its own income only if it's classified "ordinary" (set per-investment) &mdash; stock/fund-style accounts aren't taxed annually by default, since unrealized growth isn't a current tax event. Talk to your accountant for real numbers.</div></details>
   `)}
+
+  <div class="dim" style="text-align:center; font-size:11px; margin-top:20px;">Version ${APP_VERSION}</div>
   `;
 }
 
@@ -5111,7 +5420,7 @@ function fvmGrowthBreakdownAt(dateStr){
   return { receivables, totalReceivables, spending, growth: totalReceivables-spending };
 }
 function fvmBreakdownRows(items){
-  return items.filter(x=>Math.abs(x.amount)>0.5).map(x=>`<div class="row-line"><span class="l">${escHtml(x.name)}</span><span class="v" style="color:${x.amount>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(x.amount)}</span></div>`).join('');
+  return items.filter(x=>Math.abs(x.amount)>0.5).map(x=>`<div class="row-line"><span class="l">${x.name}</span><span class="v" style="color:${x.amount>=0?'var(--principal)':'var(--interest)'};">${fmtSigned$(x.amount)}</span></div>`).join('');
 }
 function fvm_showBreakdown(kind, dateStr){ openSheet({type:'fvmBreakdown', kind, date:dateStr}); }
 function fvm_selectCol(id){ state.fvm.selectedCol = id; state.multCursor = -1; openSheet({type:'fvmColDetail'}); }
@@ -5500,6 +5809,7 @@ function renderFVM(){
 
 loadLocalData();
 render();
+syncInit();
 // Rotating the phone doesn't touch app state, so nothing would otherwise trigger a re-render
 // to recompute the timeline table's max-height against the newly available screen space.
 window.addEventListener('resize', function(){
