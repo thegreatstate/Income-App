@@ -2630,7 +2630,10 @@ function renderSheet(){
   if(s.type==='fvmCashCompare'){
     const lump = fvmCompareLump();
     const sortY = state.fvm.compareSort || 10;
-    const candidates = fvmCashCandidates().sort((a,b)=>b.values[sortY]-a.values[sortY]);
+    // Same inflow rule as the What-If sheet itself — a loan prepayment isn't a real option
+    // while "Spend" is selected, so don't show tappable rows that quietly do nothing.
+    const isInflow = state.fvm.saleOpen || state.fvm.lumpDirection!=='spend';
+    const candidates = fvmCashCandidates().filter(c=>isInflow || c.kind!=='loan').sort((a,b)=>b.values[sortY]-a.values[sortY]);
     const rowsHtml = candidates.map(c=>`<div class="list-card" onclick="fvm_pickCashCandidate('${c.kind}','${c.id}')">
       <div class="prop-top">
         <div><div class="prop-name" style="font-size:14px;">${c.name}</div><div class="prop-sub">${c.sub}</div></div>
