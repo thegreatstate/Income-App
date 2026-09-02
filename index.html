@@ -81,6 +81,7 @@ html,body{margin:0; height:100%; overflow:hidden; background:var(--bg);}
   padding-top:calc(env(safe-area-inset-top) + 10px); padding-bottom:calc(env(safe-area-inset-bottom) + 10px);
 }
 .phone.privacy-active{ border:2px solid var(--danger); box-shadow:0 30px 80px -20px rgba(0,0,0,.5), 0 0 0 8px color-mix(in srgb, var(--bg) 60%, black 10%), 0 0 0 3px color-mix(in srgb, var(--danger) 35%, transparent); }
+.phone.randomize-active{ border:2px solid var(--accent); box-shadow:0 30px 80px -20px rgba(0,0,0,.5), 0 0 0 8px color-mix(in srgb, var(--bg) 60%, black 10%), 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); }
 .privacy-badge{
   position:absolute; bottom:calc(env(safe-area-inset-bottom) + 6px); left:50%; transform:translateX(-50%); z-index:60;
   background:var(--danger); color:#fff; font-size:10px; font-weight:800; text-transform:uppercase;
@@ -88,6 +89,15 @@ html,body{margin:0; height:100%; overflow:hidden; background:var(--bg);}
   white-space:nowrap; box-shadow:0 4px 10px -2px rgba(0,0,0,.4);
 }
 .phone.privacy-active .privacy-badge{ display:block; }
+/* Same badge slot, offset up when both are on so they stack instead of overlapping. */
+.randomize-badge{
+  position:absolute; bottom:calc(env(safe-area-inset-bottom) + 6px); left:50%; transform:translateX(-50%); z-index:60;
+  background:var(--accent); color:#fff; font-size:10px; font-weight:800; text-transform:uppercase;
+  letter-spacing:.06em; padding:4px 11px; border-radius:20px; display:none; pointer-events:none;
+  white-space:nowrap; box-shadow:0 4px 10px -2px rgba(0,0,0,.4);
+}
+.phone.randomize-active .randomize-badge{ display:block; }
+.phone.privacy-active.randomize-active .privacy-badge{ bottom:calc(env(safe-area-inset-bottom) + 34px); }
 .screen{ flex:1; overflow-y:auto; overflow-x:hidden; padding:18px 18px 8px; position:relative; }
 .screen::-webkit-scrollbar{width:0;}
 .header{ display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; min-height:32px;}
@@ -321,6 +331,7 @@ input:focus-visible, select:focus-visible, .list-card:focus-visible, .prop-card:
 <div class="stage">
   <div class="phone" id="phone">
     <div class="privacy-badge">&#128274; Privacy mode</div>
+    <div class="randomize-badge">&#127922; Randomized numbers</div>
     <div class="screen" id="screen"></div>
     <div class="tabbar" id="tabbar"></div>
     <div class="sheet-layer" id="sheetLayer"></div>
@@ -1515,7 +1526,7 @@ function portfolioYearsLeft(weighted){
 
 /* ============ FORMATTERS ============ */
 const state = { tab:'fvm', pushed:null, sheet:null, sheetEdit:false, propEdit:false, sort:'balance', sortDir:1,
-  settings:{ showCents:false, weightedYears:true, monthlySpending:9000, spendingPctOfInterest:10, privacyMode:false, numberStyle:'compact',
+  settings:{ showCents:false, weightedYears:true, monthlySpending:9000, spendingPctOfInterest:10, privacyMode:false, randomizeMode:false, numberStyle:'compact',
     tax:{ enabled:false, mode:'auto', manualQuarterlyAmount:0,
       fedBrackets:[ {threshold:0, rate:10}, {threshold:23200, rate:12}, {threshold:94300, rate:22}, {threshold:201050, rate:24} ],
       stateKey:'MT', stateRate:5, otherIncome:0, otherQualifiedIncome:0, useNIIT:true, bracketInflationPct:2.5, dueMonths:[4,6,9,1] },
@@ -1892,6 +1903,23 @@ function escHtml(s){
   if(s===null || s===undefined) return '';
   return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+/* Randomize mode — a stronger, separate axis from Privacy mode: instead of showing a
+   rounded-but-still-real number, every dollar figure gets multiplied by one consistent
+   random factor picked fresh each page load (never persisted, never derived from real
+   data — see RANDOMIZE_SCALE below). A single consistent multiplier, not an independent
+   random value per number, is deliberate: it keeps every relationship in the app
+   mathematically intact (a Total still equals the sum of its parts, a trend still
+   trends the same way) while your real magnitude is hidden — explicitly chosen over
+   independent-per-number randomization, which would make totals stop adding up and
+   defeat the point of being able to demo/explain the app to someone else. Rates and
+   ratios (fmtRatio/fmtPct) are deliberately left real — they're not size information
+   (a 6.75% rate doesn't reveal how much money is involved) and scaling them would
+   produce a nonsensical rate instead of hiding anything. Worth knowing: this trades
+   away unlinkability for coherence — if someone already knows one of your real dollar
+   figures, they can back out the multiplier and decode every other number in the app.
+   That's the right tradeoff for "explain this app to someone without them seeing my
+   real numbers," not a defense against a determined, informed observer. */
+const RANDOMIZE_SCALE = 0.4 + Math.random()*2.1;
 /* Two ways to coarsen a displayed number — used automatically by privacy mode, and
    independently pickable on its own (Settings &rsaquo; Rounded numbers) for anyone who
    just wants less precision day to day. Neither ever touches anything underlying.
@@ -1927,6 +1955,7 @@ function compactFmt$(n){
 }
 function fmt$(n){
   n = Math.round(n*100)/100 || 0;
+  if(state.settings.randomizeMode) n = n * RANDOMIZE_SCALE;
   const active = state.settings.privacyMode || state.settings.numberStyle!=='off';
   if(active){
     const style = state.settings.numberStyle!=='off' ? state.settings.numberStyle : 'rounded';
@@ -1982,6 +2011,7 @@ function render(){
   const tabbar = document.getElementById('tabbar');
   const sheetLayer = document.getElementById('sheetLayer');
   document.getElementById('phone').classList.toggle('privacy-active', !!state.settings.privacyMode);
+  document.getElementById('phone').classList.toggle('randomize-active', !!state.settings.randomizeMode);
   let html = '';
   if(state.pushed){
     if(state.pushed.type==='loan') html = renderLoanDetail(state.pushed.id);
@@ -4485,7 +4515,7 @@ function renderIncomeTimeline(cols, months, series){
 let _incomeTimelineCache = { key:null, html:null };
 function renderIncomeTimelineCached(allSources){
   const timelineCols = state.income.expanded ? allSources : allSources.slice(0,5);
-  const cacheKey = state.income.sortDir+'|'+(state.income.sortKey||'amount')+'|'+state.income.expanded+'|'+state.settings.privacyMode+'|'+state.settings.numberStyle+'|'+
+  const cacheKey = state.income.sortDir+'|'+(state.income.sortKey||'amount')+'|'+state.income.expanded+'|'+state.settings.privacyMode+'|'+state.settings.randomizeMode+'|'+state.settings.numberStyle+'|'+
     JSON.stringify(investments)+'|'+
     JSON.stringify(standaloneLoans)+'|'+
     JSON.stringify(properties.map(p=>({id:p.id, taxesAnnual:p.taxesAnnual, insuranceAnnual:p.insuranceAnnual, pmPct:p.pmPct, maintenancePct:p.maintenancePct, customCosts:p.customCosts, units:p.units, loans:p.loans, otherLoans:p.otherLoans, nnn:p.nnn})));
@@ -5048,6 +5078,8 @@ function renderSettings(){
         <div class="toggle ${allRefOpen?'on':''}" onclick="settings_toggleAllRef()"><div class="knob"></div></div></div>
       <div class="settings-row"><div><div class="l">Privacy mode</div><div class="sub">Swaps names for generic labels and rounds every number &mdash; nothing underlying changes, flip back any time</div></div>
         <div class="toggle ${s.privacyMode?'on':''}" onclick="toggleSetting('privacyMode')"><div class="knob"></div></div></div>
+      <div class="settings-row"><div><div class="l">Randomize numbers</div><div class="sub">Every dollar figure scaled by one random factor for this session &mdash; still adds up correctly, but not your real numbers. Reshuffles on reload.</div></div>
+        <div class="toggle ${s.randomizeMode?'on':''}" onclick="toggleSetting('randomizeMode')"><div class="knob"></div></div></div>
       <div class="settings-row"><div><div class="l">Rounded numbers</div><div class="sub">Same rounding Privacy mode uses, on its own &mdash; names stay real</div></div></div>
       <div class="seg" style="margin:-4px 0 10px;">
         <button class="${s.numberStyle==='off'?'active':''}" onclick="settings_setNumberStyle('off')">Off</button>
